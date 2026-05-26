@@ -1,0 +1,9 @@
+{
+	"id": "image-shelf",
+	"name": "Image Shelf",
+	"version": "1.0.0",
+	"minAppVersion": "0.15.0",
+	"description": "Browse, organize, tag, and manage image attachments in your vault.",
+	"author": "Image Shelf",
+	"isDesktopOnly": false
+}
