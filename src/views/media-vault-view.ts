@@ -288,6 +288,8 @@ export class MediaVaultView extends ItemView {
 	private detailPanY = 0;
 	private previewAssetId: string | null = null;
 	private previewZoom = 1;
+	private previewPanX = 0;
+	private previewPanY = 0;
 	private assetNoteAssetId: string | null = null;
 	private assetNoteContent = "";
 	private assetNoteSavedContent = "";
@@ -477,7 +479,7 @@ export class MediaVaultView extends ItemView {
 			}
 			if (event.key === "0") {
 				event.preventDefault();
-				this.previewZoom = 1;
+				this.resetPreviewViewport();
 				this.render();
 				return;
 			}
@@ -1354,15 +1356,21 @@ export class MediaVaultView extends ItemView {
 			return;
 		}
 		this.previewAssetId = asset.id;
-		this.previewZoom = 1;
+		this.resetPreviewViewport();
 		this.focusAsset(asset.id);
 		this.render();
 	}
 
 	private closeAssetPreview(): void {
 		this.previewAssetId = null;
-		this.previewZoom = 1;
+		this.resetPreviewViewport();
 		this.render();
+	}
+
+	private resetPreviewViewport(): void {
+		this.previewZoom = 1;
+		this.previewPanX = 0;
+		this.previewPanY = 0;
 	}
 
 	private getPreviewTargetAsset(): Asset | null {
@@ -1398,7 +1406,7 @@ export class MediaVaultView extends ItemView {
 			return;
 		}
 		this.previewAssetId = nextAsset.id;
-		this.previewZoom = 1;
+		this.resetPreviewViewport();
 		this.focusAsset(nextAsset.id);
 		this.render();
 	}
@@ -1406,6 +1414,103 @@ export class MediaVaultView extends ItemView {
 	private adjustPreviewZoom(delta: number): void {
 		this.previewZoom = roundDetailZoom(clamp(this.previewZoom + delta, DETAIL_ZOOM_MIN, DETAIL_ZOOM_MAX));
 		this.render();
+	}
+
+	private enablePreviewCanvasInteractions(canvas: HTMLElement): void {
+		canvas.addEventListener("wheel", (event: WheelEvent) => {
+			if (isTextEntryTarget(event.target)) {
+				return;
+			}
+			event.preventDefault();
+			const nextZoom = event.deltaY > 0
+				? this.previewZoom / DETAIL_ZOOM_WHEEL_FACTOR
+				: this.previewZoom * DETAIL_ZOOM_WHEEL_FACTOR;
+			this.setPreviewZoomFromCanvas(canvas, nextZoom, event.clientX, event.clientY);
+		}, {passive: false});
+
+		canvas.addEventListener("pointerdown", (event: PointerEvent) => {
+			if (event.button !== 0) {
+				return;
+			}
+			const target = event.target;
+			if (target instanceof HTMLElement && target.closest("button")) {
+				return;
+			}
+
+			event.preventDefault();
+			canvas.focus();
+			canvas.addClass("is-panning");
+			canvas.setPointerCapture(event.pointerId);
+			const startX = event.clientX;
+			const startY = event.clientY;
+			const initialPanX = this.previewPanX;
+			const initialPanY = this.previewPanY;
+			const applyPan = (moveEvent: PointerEvent) => {
+				this.previewPanX = initialPanX + moveEvent.clientX - startX;
+				this.previewPanY = initialPanY + moveEvent.clientY - startY;
+				this.syncPreviewViewportElements(canvas);
+			};
+			const endPan = (endEvent: PointerEvent) => {
+				applyPan(endEvent);
+				canvas.removeClass("is-panning");
+				canvas.removeEventListener("pointermove", applyPan);
+				canvas.removeEventListener("pointerup", endPan);
+				canvas.removeEventListener("pointercancel", cancelPan);
+				if (canvas.hasPointerCapture(endEvent.pointerId)) {
+					canvas.releasePointerCapture(endEvent.pointerId);
+				}
+			};
+			const cancelPan = () => {
+				canvas.removeClass("is-panning");
+				canvas.removeEventListener("pointermove", applyPan);
+				canvas.removeEventListener("pointerup", endPan);
+				canvas.removeEventListener("pointercancel", cancelPan);
+			};
+			canvas.addEventListener("pointermove", applyPan);
+			canvas.addEventListener("pointerup", endPan);
+			canvas.addEventListener("pointercancel", cancelPan);
+		});
+	}
+
+	private setPreviewZoomFromCanvas(canvas: HTMLElement, nextZoom: number, clientX: number, clientY: number): void {
+		const oldZoom = this.previewZoom;
+		const zoom = roundDetailZoom(clamp(nextZoom, DETAIL_ZOOM_MIN, DETAIL_ZOOM_MAX));
+		if (zoom === oldZoom) {
+			return;
+		}
+
+		const rect = canvas.getBoundingClientRect();
+		const anchorX = clientX - rect.left - rect.width / 2;
+		const anchorY = clientY - rect.top - rect.height / 2;
+		const ratio = zoom / oldZoom;
+		this.previewPanX = anchorX - (anchorX - this.previewPanX) * ratio;
+		this.previewPanY = anchorY - (anchorY - this.previewPanY) * ratio;
+		this.previewZoom = zoom;
+		this.syncPreviewViewportElements(canvas);
+	}
+
+	private syncPreviewViewportElements(scope: ParentNode): void {
+		const root = scope instanceof HTMLElement
+			? (scope.closest(".media-vault-preview-overlay") ?? scope)
+			: scope;
+		const stage = root.querySelector<HTMLElement>(".media-vault-preview-stage");
+		if (stage) {
+			stage.style.setProperty("--media-vault-preview-zoom", String(this.previewZoom));
+			stage.style.setProperty("--media-vault-preview-pan-x", `${this.previewPanX}px`);
+			stage.style.setProperty("--media-vault-preview-pan-y", `${this.previewPanY}px`);
+		}
+		const readout = root.querySelector<HTMLElement>(".media-vault-preview-zoom-value");
+		if (readout) {
+			readout.setText(`${Math.round(this.previewZoom * 100)}%`);
+		}
+		const zoomOut = root.querySelector<HTMLButtonElement>("[data-preview-action='zoom-out']");
+		if (zoomOut) {
+			zoomOut.disabled = this.previewZoom <= DETAIL_ZOOM_MIN;
+		}
+		const zoomIn = root.querySelector<HTMLButtonElement>("[data-preview-action='zoom-in']");
+		if (zoomIn) {
+			zoomIn.disabled = this.previewZoom >= DETAIL_ZOOM_MAX;
+		}
 	}
 
 	private renderPreviewOverlay(parent: Element): void {
@@ -1430,43 +1535,61 @@ export class MediaVaultView extends ItemView {
 		const modal = overlay.createDiv({cls: "media-vault-preview-modal"});
 		const header = modal.createDiv({cls: "media-vault-preview-header"});
 		const title = header.createDiv({cls: "media-vault-preview-title"});
-		title.createSpan({cls: "media-vault-preview-pill", text: "预览"});
 		title.createSpan({text: asset.filename});
-		const close = header.createEl("button", {text: "×", attr: {"aria-label": "关闭预览"}});
+		title.createSpan({cls: "media-vault-preview-count", text: `${currentIndex + 1} / ${assets.length}`});
+		const topActions = header.createDiv({cls: "media-vault-preview-top-actions"});
+		const close = this.createPreviewIconButton(topActions, "x", "关闭预览");
 		close.addEventListener("click", () => this.closeAssetPreview());
 
 		const body = modal.createDiv({cls: "media-vault-preview-body"});
-		const previous = body.createEl("button", {cls: "media-vault-preview-nav is-prev", text: "‹", attr: {"aria-label": "上一张"}});
+		const canvas = body.createDiv({cls: "media-vault-preview-canvas"});
+		canvas.tabIndex = 0;
+		this.enablePreviewCanvasInteractions(canvas);
+		const previous = this.createPreviewIconButton(body, "chevron-left", "上一张", "media-vault-preview-nav is-prev");
 		previous.disabled = currentIndex <= 0;
 		previous.addEventListener("click", () => this.navigatePreviewAsset(-1));
-		const stage = body.createDiv({cls: "media-vault-preview-stage"});
+		const stage = canvas.createDiv({cls: "media-vault-preview-stage"});
 		stage.style.setProperty("--media-vault-preview-zoom", String(this.previewZoom));
+		stage.style.setProperty("--media-vault-preview-pan-x", `${this.previewPanX}px`);
+		stage.style.setProperty("--media-vault-preview-pan-y", `${this.previewPanY}px`);
 		const resourcePath = this.getDetailImageResourcePath(asset);
 		if (resourcePath) {
 			stage.createEl("img", {attr: {src: resourcePath, alt: asset.filename}});
 		} else {
 			stage.createDiv({cls: "media-vault-empty-title", text: "无法读取图片资源"});
 		}
-		const next = body.createEl("button", {cls: "media-vault-preview-nav is-next", text: "›", attr: {"aria-label": "下一张"}});
+		const next = this.createPreviewIconButton(body, "chevron-right", "下一张", "media-vault-preview-nav is-next");
 		next.disabled = currentIndex >= assets.length - 1;
 		next.addEventListener("click", () => this.navigatePreviewAsset(1));
 
-		const footer = modal.createDiv({cls: "media-vault-preview-footer"});
-		footer.createSpan({text: `${currentIndex + 1} / ${assets.length}`});
-		const zoom = footer.createDiv({cls: "media-vault-detail-zoom-bar media-vault-preview-zoom-bar"});
-		const zoomOut = zoom.createEl("button", {text: "−", attr: {"aria-label": "缩小预览"}});
+		const toolbar = modal.createDiv({cls: "media-vault-preview-toolbar"});
+		const zoomOut = this.createPreviewIconButton(toolbar, "minus", "缩小预览");
+		zoomOut.dataset.previewAction = "zoom-out";
 		zoomOut.disabled = this.previewZoom <= DETAIL_ZOOM_MIN;
 		zoomOut.addEventListener("click", () => this.adjustPreviewZoom(-DETAIL_ZOOM_STEP));
-		zoom.createSpan({text: `${Math.round(this.previewZoom * 100)}%`});
-		const zoomIn = zoom.createEl("button", {text: "+", attr: {"aria-label": "放大预览"}});
+		toolbar.createSpan({cls: "media-vault-preview-zoom-value", text: `${Math.round(this.previewZoom * 100)}%`});
+		const zoomIn = this.createPreviewIconButton(toolbar, "plus", "放大预览");
+		zoomIn.dataset.previewAction = "zoom-in";
 		zoomIn.disabled = this.previewZoom >= DETAIL_ZOOM_MAX;
 		zoomIn.addEventListener("click", () => this.adjustPreviewZoom(DETAIL_ZOOM_STEP));
-		const fit = zoom.createEl("button", {text: "适应"});
+		const fit = this.createPreviewIconButton(toolbar, "maximize-2", "适应窗口");
 		fit.addEventListener("click", () => {
-			this.previewZoom = 1;
+			this.resetPreviewViewport();
 			this.render();
 		});
-		footer.createSpan({cls: "media-vault-preview-shortcuts", text: "Esc / Space 关闭"});
+	}
+
+	private createPreviewIconButton(parent: Element, icon: string, label: string, className = ""): HTMLButtonElement {
+		const button = parent.createEl("button", {
+			cls: ["media-vault-preview-icon-button", className].filter(Boolean).join(" "),
+			attr: {
+				type: "button",
+				"aria-label": label,
+				title: label,
+			},
+		});
+		setIcon(button, icon);
+		return button;
 	}
 
 	private renderDetailCenter(parent: Element, asset: Asset): void {
@@ -5713,6 +5836,11 @@ export class MediaVaultView extends ItemView {
 		element.setAttr("role", "button");
 		element.setAttr("aria-label", `${asset.filename}，${isSelected ? "已选择" : "未选择"}`);
 		element.setAttr("aria-selected", String(isSelected));
+		element.addEventListener("mouseenter", () => {
+			if (this.focusedAssetId !== asset.id) {
+				this.focusAsset(asset.id);
+			}
+		});
 		element.addEventListener("focus", () => {
 			this.preserveMasonryScrollBeforeAssetInteraction(asset.id);
 			this.focusAsset(asset.id);
