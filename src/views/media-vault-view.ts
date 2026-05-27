@@ -23,6 +23,7 @@ interface VirtualGridLayout {
 	columns: number;
 	cardWidth: number;
 	cardHeight: number;
+	previewHeight: number;
 	gap: number;
 	leftInset: number;
 	rowStride: number;
@@ -79,6 +80,9 @@ const GRID_OVERSCAN_ROWS = 3;
 const COMPACT_BASE_CARD_WIDTH = 136;
 const COMPACT_BASE_PREVIEW_HEIGHT = 112;
 const COMPACT_GAP = 6;
+const GALLERY_EDGE_PADDING = 6;
+const GALLERY_CARD_MIN_WIDTH_RATIO = 0.82;
+const GALLERY_CARD_MAX_WIDTH_RATIO = 1.32;
 const MASONRY_BASE_CARD_WIDTH = 216;
 const MASONRY_GAP = 8;
 const MASONRY_MIN_PREVIEW_HEIGHT = 126;
@@ -307,6 +311,8 @@ export class MediaVaultView extends ItemView {
 	private virtualAssets: Asset[] = [];
 	private virtualFocusedAssetId: string | null = null;
 	private readonly virtualRenderedCards = new Map<string, HTMLDivElement>();
+	private galleryResizeObserver: ResizeObserver | null = null;
+	private pendingGalleryResizeFrame: number | null = null;
 	private readonly imageAspectRatios = new Map<string, number>();
 	private cachedMasonryResult: {items: MasonryItem[]; height: number} | null = null;
 	private cachedMasonryKey = "";
@@ -418,6 +424,12 @@ export class MediaVaultView extends ItemView {
 			window.cancelAnimationFrame(this.pendingScrollRestoreFrame);
 			this.pendingScrollRestoreFrame = null;
 		}
+		if (this.pendingGalleryResizeFrame !== null) {
+			window.cancelAnimationFrame(this.pendingGalleryResizeFrame);
+			this.pendingGalleryResizeFrame = null;
+		}
+		this.galleryResizeObserver?.disconnect();
+		this.galleryResizeObserver = null;
 		if (this.ratioRefreshTimeout !== null) {
 			window.clearTimeout(this.ratioRefreshTimeout);
 			this.ratioRefreshTimeout = null;
@@ -4763,7 +4775,7 @@ export class MediaVaultView extends ItemView {
 		const gallery = main.createDiv({
 			cls: this.viewMode === "list" ? "media-vault-gallery-list" : `media-vault-gallery-${this.viewMode} media-vault-virtual-gallery`,
 		});
-		this.virtualGalleryEl = gallery;
+		this.bindVirtualGallery(gallery);
 		this.enableGalleryBoxSelection(gallery);
 
 		if (assets.length === 0) {
@@ -4788,8 +4800,51 @@ export class MediaVaultView extends ItemView {
 		}
 	}
 
-	private renderVirtualGrid(gallery: HTMLDivElement, assets: Asset[], focusedAsset: Asset | undefined): void {
+	private bindVirtualGallery(gallery: HTMLDivElement): void {
+		if (this.virtualGalleryEl === gallery) {
+			return;
+		}
+
+		this.galleryResizeObserver?.disconnect();
 		this.virtualGalleryEl = gallery;
+		this.lastKnownGalleryWidth = gallery.clientWidth || this.lastKnownGalleryWidth;
+		this.galleryResizeObserver = new ResizeObserver(() => this.scheduleGalleryResizeRefresh(gallery));
+		this.galleryResizeObserver.observe(gallery);
+	}
+
+	private scheduleGalleryResizeRefresh(gallery: HTMLDivElement): void {
+		if (this.pendingGalleryResizeFrame !== null) {
+			return;
+		}
+
+		this.pendingGalleryResizeFrame = window.requestAnimationFrame(() => {
+			this.pendingGalleryResizeFrame = null;
+			if (this.virtualGalleryEl !== gallery || !this.virtualSpacerEl) {
+				return;
+			}
+			const nextWidth = gallery.clientWidth || this.lastKnownGalleryWidth;
+			if (Math.abs(nextWidth - this.lastKnownGalleryWidth) < 2) {
+				return;
+			}
+
+			const scrollTop = this.readStableGalleryScrollTop(gallery);
+			if (this.viewMode === "masonry") {
+				const scrollAnchor = this.captureRenderedGalleryScrollAnchor(gallery) ?? this.captureGalleryScrollAnchor(gallery);
+				this.lastKnownGalleryWidth = nextWidth;
+				this.invalidateMasonryCache();
+				this.protectedScrollAnchor = scrollAnchor;
+				this.renderVisibleMasonryCards(gallery, this.virtualSpacerEl, scrollTop);
+				this.protectGalleryScroll(this.gridScrollTop, scrollAnchor);
+				return;
+			}
+
+			this.lastKnownGalleryWidth = nextWidth;
+			this.renderVisibleGridCards(gallery, this.virtualSpacerEl, scrollTop);
+		});
+	}
+
+	private renderVirtualGrid(gallery: HTMLDivElement, assets: Asset[], focusedAsset: Asset | undefined): void {
+		this.bindVirtualGallery(gallery);
 		this.virtualAssets = assets;
 		this.virtualFocusedAssetId = focusedAsset?.id ?? null;
 
@@ -4809,7 +4864,7 @@ export class MediaVaultView extends ItemView {
 	}
 
 	private renderVirtualMasonry(gallery: HTMLDivElement, assets: Asset[], focusedAsset: Asset | undefined): void {
-		this.virtualGalleryEl = gallery;
+		this.bindVirtualGallery(gallery);
 		this.virtualAssets = assets;
 		this.virtualFocusedAssetId = focusedAsset?.id ?? null;
 
@@ -4962,7 +5017,7 @@ export class MediaVaultView extends ItemView {
 			const row = Math.floor(index / layout.columns);
 			const column = index % layout.columns;
 			visibleAssetIds.add(asset.id);
-			const card = this.getOrCreateVirtualCard(spacer, asset, false, this.virtualFocusedAssetId === asset.id, this.getGridPreviewHeight());
+			const card = this.getOrCreateVirtualCard(spacer, asset, false, this.virtualFocusedAssetId === asset.id, layout.previewHeight);
 			card.style.width = `${layout.cardWidth}px`;
 			card.style.height = `${layout.cardHeight}px`;
 			card.style.left = `${layout.leftInset + column * (layout.cardWidth + layout.gap)}px`;
@@ -5044,17 +5099,20 @@ export class MediaVaultView extends ItemView {
 	private getVirtualGridLayout(gallery: HTMLElement): VirtualGridLayout {
 		const width = gallery.clientWidth || this.lastKnownGalleryWidth || 1000;
 		this.lastKnownGalleryWidth = width;
-		const cardWidth = this.getGridCardWidth();
-		const cardHeight = this.getGridCardHeight();
+		const targetCardWidth = this.getGridCardWidth();
+		const targetPreviewHeight = this.getGridPreviewHeight();
 		const gap = this.viewMode === "compact" ? COMPACT_GAP : GRID_GAP;
-		const columns = Math.max(1, Math.floor((width + gap) / (cardWidth + gap)));
-		const usedWidth = columns * cardWidth + (columns - 1) * gap;
+		const {columns, cardWidth, leftInset} = getTightGalleryColumns(width, targetCardWidth, gap);
+		const previewScale = cardWidth / Math.max(1, targetCardWidth);
+		const previewHeight = Math.max(72, Math.round(targetPreviewHeight * previewScale));
+		const cardHeight = this.viewMode === "compact" ? previewHeight : previewHeight + this.getCardBodyHeight();
 		return {
 			columns,
 			cardWidth,
 			cardHeight,
+			previewHeight,
 			gap,
-			leftInset: Math.max(0, Math.floor((width - usedWidth) / 2)),
+			leftInset,
 			rowStride: cardHeight + gap,
 		};
 	}
@@ -5062,14 +5120,13 @@ export class MediaVaultView extends ItemView {
 	private getMasonryLayout(gallery: HTMLElement): MasonryLayout {
 		const width = gallery.clientWidth || this.lastKnownGalleryWidth || 1000;
 		this.lastKnownGalleryWidth = width;
-		const cardWidth = this.getMasonryCardWidth();
-		const columns = Math.max(1, Math.floor((width + MASONRY_GAP) / (cardWidth + MASONRY_GAP)));
-		const usedWidth = columns * cardWidth + (columns - 1) * MASONRY_GAP;
+		const targetCardWidth = this.getMasonryCardWidth();
+		const {columns, cardWidth, leftInset} = getTightGalleryColumns(width, targetCardWidth, MASONRY_GAP);
 		return {
 			columns,
 			cardWidth,
 			gap: MASONRY_GAP,
-			leftInset: Math.max(0, Math.floor((width - usedWidth) / 2)),
+			leftInset,
 		};
 	}
 
@@ -5139,14 +5196,6 @@ export class MediaVaultView extends ItemView {
 	private getGridPreviewHeight(): number {
 		const baseHeight = this.viewMode === "compact" ? COMPACT_BASE_PREVIEW_HEIGHT : GRID_BASE_PREVIEW_HEIGHT;
 		return Math.round(baseHeight * this.thumbnailScale);
-	}
-
-	private getGridCardHeight(): number {
-		if (this.viewMode === "compact") {
-			return this.getGridPreviewHeight();
-		}
-
-		return this.getGridPreviewHeight() + this.getCardBodyHeight();
 	}
 
 	private getCardBodyHeight(): number {
@@ -5361,6 +5410,36 @@ export class MediaVaultView extends ItemView {
 			assetId: anchorItem.asset.id,
 			viewportOffset: anchorItem.y - scrollTop,
 		};
+	}
+
+	private captureRenderedGalleryScrollAnchor(gallery: HTMLDivElement): GalleryScrollAnchor | null {
+		if (this.viewMode !== "masonry") {
+			return null;
+		}
+
+		const scrollTop = this.readStableGalleryScrollTop(gallery);
+		let closest: GalleryScrollAnchor | null = null;
+		let closestDistance = Number.POSITIVE_INFINITY;
+		for (const card of this.virtualRenderedCards.values()) {
+			const assetId = card.dataset.mediaVaultAssetId;
+			if (!assetId) {
+				continue;
+			}
+			const top = Number.parseFloat(card.style.top || "0");
+			const height = card.offsetHeight || Number.parseFloat(card.style.height || "0");
+			if (!Number.isFinite(top) || !Number.isFinite(height) || top + height < scrollTop) {
+				continue;
+			}
+			const distance = Math.abs(top - scrollTop);
+			if (distance < closestDistance) {
+				closestDistance = distance;
+				closest = {
+					assetId,
+					viewportOffset: top - scrollTop,
+				};
+			}
+		}
+		return closest;
 	}
 
 	private resolveProtectedMasonryScrollTop(items: MasonryItem[], fallbackScrollTop: number, maxScrollTop: number): number {
@@ -7234,6 +7313,45 @@ function getShortestColumnIndex(columnHeights: number[]): number {
 	}
 
 	return shortestIndex;
+}
+
+function getTightGalleryColumns(width: number, targetCardWidth: number, gap: number): {columns: number; cardWidth: number; leftInset: number} {
+	const safeWidth = Math.max(1, Math.floor(width));
+	const availableWidth = Math.max(1, safeWidth - GALLERY_EDGE_PADDING * 2);
+	const minimumCardWidth = Math.max(96, Math.round(targetCardWidth * GALLERY_CARD_MIN_WIDTH_RATIO));
+	const maximumCardWidth = Math.max(minimumCardWidth, Math.round(targetCardWidth * GALLERY_CARD_MAX_WIDTH_RATIO));
+	const maximumColumns = Math.max(1, Math.floor((availableWidth + gap) / (minimumCardWidth + gap)));
+	let bestColumns = 1;
+	let bestCardWidth = getFilledCardWidth(availableWidth, bestColumns, gap);
+	let bestScore = getFilledLayoutScore(bestCardWidth, targetCardWidth, minimumCardWidth, maximumCardWidth);
+
+	for (let columns = 2; columns <= maximumColumns; columns += 1) {
+		const cardWidth = getFilledCardWidth(availableWidth, columns, gap);
+		const score = getFilledLayoutScore(cardWidth, targetCardWidth, minimumCardWidth, maximumCardWidth);
+		if (score < bestScore || (score === bestScore && columns > bestColumns)) {
+			bestColumns = columns;
+			bestCardWidth = cardWidth;
+			bestScore = score;
+		}
+	}
+
+	const usedWidth = bestColumns * bestCardWidth + (bestColumns - 1) * gap;
+	const leftoverWidth = Math.max(0, availableWidth - usedWidth);
+	return {
+		columns: bestColumns,
+		cardWidth: bestCardWidth,
+		leftInset: GALLERY_EDGE_PADDING + Math.floor(leftoverWidth / 2),
+	};
+}
+
+function getFilledCardWidth(availableWidth: number, columns: number, gap: number): number {
+	return Math.max(1, Math.floor((availableWidth - (columns - 1) * gap) / columns));
+}
+
+function getFilledLayoutScore(cardWidth: number, targetCardWidth: number, minimumCardWidth: number, maximumCardWidth: number): number {
+	const tooNarrowPenalty = cardWidth < minimumCardWidth ? (minimumCardWidth - cardWidth) * 4 : 0;
+	const tooWidePenalty = cardWidth > maximumCardWidth ? (cardWidth - maximumCardWidth) * 4 : 0;
+	return Math.abs(cardWidth - targetCardWidth) + tooNarrowPenalty + tooWidePenalty;
 }
 
 function getPersistedAspectRatio(asset: Asset): number | null {
