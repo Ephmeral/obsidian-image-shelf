@@ -290,6 +290,10 @@ export class MediaVaultView extends ItemView {
 	private previewZoom = 1;
 	private previewPanX = 0;
 	private previewPanY = 0;
+	private previewRotation = 0;
+	private previewFlipX = false;
+	private previewFlipY = false;
+	private previewInvert = false;
 	private assetNoteAssetId: string | null = null;
 	private assetNoteContent = "";
 	private assetNoteSavedContent = "";
@@ -480,7 +484,7 @@ export class MediaVaultView extends ItemView {
 			if (event.key === "0") {
 				event.preventDefault();
 				this.resetPreviewViewport();
-				this.render();
+				this.syncPreviewViewportElements(this.contentEl);
 				return;
 			}
 		}
@@ -1371,6 +1375,10 @@ export class MediaVaultView extends ItemView {
 		this.previewZoom = 1;
 		this.previewPanX = 0;
 		this.previewPanY = 0;
+		this.previewRotation = 0;
+		this.previewFlipX = false;
+		this.previewFlipY = false;
+		this.previewInvert = false;
 	}
 
 	private getPreviewTargetAsset(): Asset | null {
@@ -1413,7 +1421,27 @@ export class MediaVaultView extends ItemView {
 
 	private adjustPreviewZoom(delta: number): void {
 		this.previewZoom = roundDetailZoom(clamp(this.previewZoom + delta, DETAIL_ZOOM_MIN, DETAIL_ZOOM_MAX));
-		this.render();
+		this.syncPreviewViewportElements(this.contentEl);
+	}
+
+	private rotatePreview(degrees: number): void {
+		this.previewRotation = normalizeDegrees(this.previewRotation + degrees);
+		this.syncPreviewViewportElements(this.contentEl);
+	}
+
+	private togglePreviewFlipX(): void {
+		this.previewFlipX = !this.previewFlipX;
+		this.syncPreviewViewportElements(this.contentEl);
+	}
+
+	private togglePreviewFlipY(): void {
+		this.previewFlipY = !this.previewFlipY;
+		this.syncPreviewViewportElements(this.contentEl);
+	}
+
+	private togglePreviewInvert(): void {
+		this.previewInvert = !this.previewInvert;
+		this.syncPreviewViewportElements(this.contentEl);
 	}
 
 	private enablePreviewCanvasInteractions(canvas: HTMLElement): void {
@@ -1498,6 +1526,10 @@ export class MediaVaultView extends ItemView {
 			stage.style.setProperty("--media-vault-preview-zoom", String(this.previewZoom));
 			stage.style.setProperty("--media-vault-preview-pan-x", `${this.previewPanX}px`);
 			stage.style.setProperty("--media-vault-preview-pan-y", `${this.previewPanY}px`);
+			stage.style.setProperty("--media-vault-preview-rotate", `${this.previewRotation}deg`);
+			stage.style.setProperty("--media-vault-preview-scale-x", this.previewFlipX ? "-1" : "1");
+			stage.style.setProperty("--media-vault-preview-scale-y", this.previewFlipY ? "-1" : "1");
+			stage.style.setProperty("--media-vault-preview-filter", this.previewInvert ? "invert(1) hue-rotate(180deg)" : "none");
 		}
 		const readout = root.querySelector<HTMLElement>(".media-vault-preview-zoom-value");
 		if (readout) {
@@ -1510,6 +1542,16 @@ export class MediaVaultView extends ItemView {
 		const zoomIn = root.querySelector<HTMLButtonElement>("[data-preview-action='zoom-in']");
 		if (zoomIn) {
 			zoomIn.disabled = this.previewZoom >= DETAIL_ZOOM_MAX;
+		}
+		this.syncPreviewActiveButton(root, "flip-x", this.previewFlipX);
+		this.syncPreviewActiveButton(root, "flip-y", this.previewFlipY);
+		this.syncPreviewActiveButton(root, "invert", this.previewInvert);
+	}
+
+	private syncPreviewActiveButton(root: ParentNode, action: string, isActive: boolean): void {
+		const button = root.querySelector<HTMLButtonElement>(`[data-preview-action='${action}']`);
+		if (button) {
+			button.classList.toggle("is-active", isActive);
 		}
 	}
 
@@ -1552,6 +1594,10 @@ export class MediaVaultView extends ItemView {
 		stage.style.setProperty("--media-vault-preview-zoom", String(this.previewZoom));
 		stage.style.setProperty("--media-vault-preview-pan-x", `${this.previewPanX}px`);
 		stage.style.setProperty("--media-vault-preview-pan-y", `${this.previewPanY}px`);
+		stage.style.setProperty("--media-vault-preview-rotate", `${this.previewRotation}deg`);
+		stage.style.setProperty("--media-vault-preview-scale-x", this.previewFlipX ? "-1" : "1");
+		stage.style.setProperty("--media-vault-preview-scale-y", this.previewFlipY ? "-1" : "1");
+		stage.style.setProperty("--media-vault-preview-filter", this.previewInvert ? "invert(1) hue-rotate(180deg)" : "none");
 		const resourcePath = this.getDetailImageResourcePath(asset);
 		if (resourcePath) {
 			stage.createEl("img", {attr: {src: resourcePath, alt: asset.filename}});
@@ -1575,8 +1621,24 @@ export class MediaVaultView extends ItemView {
 		const fit = this.createPreviewIconButton(toolbar, "maximize-2", "适应窗口");
 		fit.addEventListener("click", () => {
 			this.resetPreviewViewport();
-			this.render();
+			this.syncPreviewViewportElements(toolbar);
 		});
+		const rotateLeft = this.createPreviewIconButton(toolbar, "rotate-ccw", "向左旋转");
+		rotateLeft.addEventListener("click", () => this.rotatePreview(-90));
+		const rotateRight = this.createPreviewIconButton(toolbar, "rotate-cw", "向右旋转");
+		rotateRight.addEventListener("click", () => this.rotatePreview(90));
+		const flipX = this.createPreviewIconButton(toolbar, "flip-horizontal", "水平翻转");
+		flipX.dataset.previewAction = "flip-x";
+		flipX.classList.toggle("is-active", this.previewFlipX);
+		flipX.addEventListener("click", () => this.togglePreviewFlipX());
+		const flipY = this.createPreviewIconButton(toolbar, "flip-vertical", "垂直翻转");
+		flipY.dataset.previewAction = "flip-y";
+		flipY.classList.toggle("is-active", this.previewFlipY);
+		flipY.addEventListener("click", () => this.togglePreviewFlipY());
+		const invert = this.createPreviewIconButton(toolbar, "contrast", "深色反转");
+		invert.dataset.previewAction = "invert";
+		invert.classList.toggle("is-active", this.previewInvert);
+		invert.addEventListener("click", () => this.togglePreviewInvert());
 	}
 
 	private createPreviewIconButton(parent: Element, icon: string, label: string, className = ""): HTMLButtonElement {
@@ -7496,6 +7558,10 @@ function clamp(value: number, min: number, max: number): number {
 
 function roundDetailZoom(value: number): number {
 	return Math.round(value * 100) / 100;
+}
+
+function normalizeDegrees(value: number): number {
+	return ((value % 360) + 360) % 360;
 }
 
 function formatAnnotationPercent(value: number): string {

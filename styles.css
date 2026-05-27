@@ -2956,7 +2956,10 @@
 	overflow: visible;
 	transform:
 		translate(var(--media-vault-preview-pan-x, 0), var(--media-vault-preview-pan-y, 0))
-		scale(var(--media-vault-preview-zoom, 1));
+		scale(var(--media-vault-preview-zoom, 1))
+		rotate(var(--media-vault-preview-rotate, 0deg))
+		scaleX(var(--media-vault-preview-scale-x, 1))
+		scaleY(var(--media-vault-preview-scale-y, 1));
 	transform-origin: center;
 	transition: transform 90ms ease-out;
 	will-change: transform;
@@ -2969,6 +2972,7 @@
 	border-radius: 6px;
 	background: transparent;
 	box-shadow: 0 22px 70px rgba(0, 0, 0, 0.52);
+	filter: var(--media-vault-preview-filter, none);
 	object-fit: contain;
 	pointer-events: none;
 	user-select: none;
@@ -3032,6 +3036,16 @@
 .media-vault-preview-icon-button:hover:not(:disabled) {
 	background: color-mix(in srgb, var(--interactive-accent) 18%, transparent);
 	color: var(--text-normal);
+}
+
+.media-vault-preview-icon-button.is-active {
+	background: var(--interactive-accent);
+	color: var(--text-on-accent);
+}
+
+.media-vault-preview-icon-button.is-active:hover {
+	background: var(--interactive-accent-hover);
+	color: var(--text-on-accent);
 }
 
 .media-vault-preview-zoom-value {
