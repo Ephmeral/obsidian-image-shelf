@@ -445,10 +445,6 @@ export class MediaVaultView extends ItemView {
 
 	private handleGlobalKeydown(event: KeyboardEvent): void {
 		const target = event.target;
-		if (target instanceof Node && !this.contentEl.contains(target)) {
-			return;
-		}
-
 		if (this.previewAssetId) {
 			if (isTextEntryTarget(target)) {
 				return;
@@ -487,6 +483,10 @@ export class MediaVaultView extends ItemView {
 				this.syncPreviewViewportElements(this.contentEl);
 				return;
 			}
+		}
+
+		if (target instanceof Node && !this.contentEl.contains(target)) {
+			return;
 		}
 
 		if (this.isAnnotationEditMode()) {
@@ -1445,6 +1445,20 @@ export class MediaVaultView extends ItemView {
 	}
 
 	private enablePreviewCanvasInteractions(canvas: HTMLElement): void {
+		let suppressBlankClose = false;
+
+		canvas.addEventListener("click", (event: MouseEvent) => {
+			if (suppressBlankClose) {
+				suppressBlankClose = false;
+				return;
+			}
+			if (event.target === canvas) {
+				event.preventDefault();
+				event.stopPropagation();
+				this.closeAssetPreview();
+			}
+		});
+
 		canvas.addEventListener("wheel", (event: WheelEvent) => {
 			if (isTextEntryTarget(event.target)) {
 				return;
@@ -1473,13 +1487,23 @@ export class MediaVaultView extends ItemView {
 			const startY = event.clientY;
 			const initialPanX = this.previewPanX;
 			const initialPanY = this.previewPanY;
+			let didDrag = false;
 			const applyPan = (moveEvent: PointerEvent) => {
+				if (Math.abs(moveEvent.clientX - startX) > 4 || Math.abs(moveEvent.clientY - startY) > 4) {
+					didDrag = true;
+				}
 				this.previewPanX = initialPanX + moveEvent.clientX - startX;
 				this.previewPanY = initialPanY + moveEvent.clientY - startY;
 				this.syncPreviewViewportElements(canvas);
 			};
 			const endPan = (endEvent: PointerEvent) => {
 				applyPan(endEvent);
+				suppressBlankClose = didDrag;
+				if (didDrag) {
+					window.setTimeout(() => {
+						suppressBlankClose = false;
+					}, 0);
+				}
 				canvas.removeClass("is-panning");
 				canvas.removeEventListener("pointermove", applyPan);
 				canvas.removeEventListener("pointerup", endPan);
