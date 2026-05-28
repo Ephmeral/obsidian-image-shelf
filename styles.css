@@ -227,10 +227,11 @@
 }
 
 .media-vault-sidebar-item {
-	display: flex;
-	justify-content: space-between;
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) max-content;
 	align-items: center;
 	gap: 8px;
+	min-width: 0;
 	padding: 8px 10px;
 	border-radius: 6px;
 	cursor: pointer;
@@ -264,6 +265,7 @@
 	display: inline-flex;
 	align-items: center;
 	flex: 0 0 auto;
+	justify-self: end;
 	gap: 6px;
 }
 
@@ -296,9 +298,11 @@
 	display: inline-flex;
 	align-items: center;
 	min-width: 0;
+	overflow: hidden;
 	gap: 8px;
 }
 
+.media-vault-sidebar-item > span:first-child:not(.media-vault-count):not(.media-vault-sidebar-actions):not(.media-vault-sidebar-status),
 .media-vault-sidebar-text {
 	min-width: 0;
 	overflow: hidden;
@@ -314,14 +318,20 @@
 }
 
 .media-vault-count {
+	flex: 0 0 auto;
+	justify-self: end;
 	font-size: 11px;
+	font-variant-numeric: tabular-nums;
 	color: var(--text-faint);
+	white-space: nowrap;
 }
 
 .media-vault-sidebar-status {
 	display: inline-flex;
 	align-items: center;
 	justify-content: center;
+	justify-self: end;
+	flex: 0 0 auto;
 	height: 18px;
 	padding: 0 6px;
 	border: 1px solid var(--background-modifier-border);
