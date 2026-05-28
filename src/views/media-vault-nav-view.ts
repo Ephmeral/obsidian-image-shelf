@@ -1,15 +1,14 @@
-import {ItemView, Notice, TFile, TFolder, WorkspaceLeaf} from "obsidian";
+import {ItemView, Notice, WorkspaceLeaf} from "obsidian";
 import {MEDIA_VAULT_NAV_VIEW_TYPE, PLUGIN_DISPLAY_NAME} from "../constants";
 import type MediaVaultPlugin from "../main";
-import type {Asset, AssetReference} from "../types/asset";
+import type {Asset, Collection} from "../types/asset";
 import type {AssetQuery, QuickFilterId} from "../types/query";
 import {getDuplicateAssetIds} from "../services/search-service";
-import {getParentPath} from "../utils/path-utils";
 
 const MAX_NAV_FACET_ITEMS = 10;
 const TAG_DOT_COLORS = ["#6c5ce7", "#d09a11", "#d85d72", "#2f9e63", "#3182ce", "#805ad5", "#dd6b20", "#0f766e"];
 
-type NavSectionId = "gallery" | "obsidian" | "smart" | "collections" | "projects" | "tags" | "system";
+type NavSectionId = "gallery" | "smart" | "collections" | "tags" | "system";
 
 export class MediaVaultNavView extends ItemView {
 	private readonly plugin: MediaVaultPlugin;
@@ -90,37 +89,27 @@ export class MediaVaultNavView extends ItemView {
 			section.createDiv({cls: "media-vault-hint", text: "索引、引用和缩略图缓存均可重建。"});
 		});
 
-		const smartCollections = this.plugin.services.assetRepository.getCollections()
+		const collections = this.plugin.services.assetRepository.getCollections();
+		const smartCollections = collections
 			.filter((collection) => collection.type === "smart");
 		this.renderSection(root, "smart", "Smart Collections", (section) => {
 			for (const collection of smartCollections) {
-					const query = collection.query as AssetQuery;
-					const linkedByNote = query.linkedByNote;
-					const linkedByFolder = query.linkedByFolder;
-				const isUnavailable = Boolean(
-					(linkedByNote && !isNotePathAvailable(this.plugin, linkedByNote))
-					|| (linkedByFolder && !isFolderPathAvailable(this.plugin, linkedByFolder)),
-				);
+				const query = collection.query as AssetQuery;
 				const count = this.plugin.services.searchService.filterAssets(
 					activeAssets,
 					"all",
 					query,
 				).length;
-					const item = section.createDiv({
-						cls: [
-							"media-vault-sidebar-item",
-							activeCollectionId === collection.id ? "is-active" : "",
-						isUnavailable ? "is-unavailable" : "",
+				const item = section.createDiv({
+					cls: [
+						"media-vault-sidebar-item",
+						activeCollectionId === collection.id ? "is-active" : "",
 					].filter(Boolean).join(" "),
 				});
 				const label = item.createSpan({cls: "media-vault-sidebar-text", text: collection.name});
-				label.setAttr("title", getSmartCollectionTitle(collection.name, linkedByNote, linkedByFolder, isUnavailable));
+				label.setAttr("title", collection.name);
 				const meta = item.createSpan({cls: "media-vault-sidebar-actions"});
-				if (isUnavailable) {
-					meta.createSpan({cls: "media-vault-sidebar-status", text: "不可用"});
-				} else {
-					meta.createSpan({cls: "media-vault-count", text: String(count)});
-				}
+				meta.createSpan({cls: "media-vault-count", text: String(count)});
 				const remove = meta.createEl("button", {cls: "media-vault-sidebar-action", text: "×"});
 				remove.setAttr("aria-label", `删除智能集合 ${collection.name}`);
 				remove.addEventListener("click", (event) => {
@@ -128,14 +117,10 @@ export class MediaVaultNavView extends ItemView {
 					event.stopPropagation();
 					void this.deleteSmartCollection(collection.id);
 				});
-				if (isUnavailable) {
-					item.setAttr("aria-disabled", "true");
-				} else {
-					item.addEventListener("click", () => {
-						this.plugin.setActiveCollection(collection.id);
-					});
-					}
-				}
+				item.addEventListener("click", () => {
+					this.plugin.setActiveCollection(collection.id);
+				});
+			}
 			const createSmart = section.createDiv({cls: "media-vault-sidebar-item media-vault-sidebar-create"});
 			createSmart.createSpan({text: "+ 新建 Smart Collection"});
 			createSmart.addEventListener("click", () => {
@@ -143,80 +128,23 @@ export class MediaVaultNavView extends ItemView {
 			});
 		});
 
-		const manualCollections = getTopValueCounts(activeAssets, (asset) => asset.collections, MAX_NAV_FACET_ITEMS);
-		if (manualCollections.length > 0) {
-			this.renderSection(root, "collections", "Collections", (section) => {
-				for (const collection of manualCollections) {
-					const item = section.createDiv({cls: `media-vault-sidebar-item ${isSingleNavValue(activeNavQuery, "collections", collection.value) ? "is-active" : ""}`});
-					const label = item.createSpan({cls: "media-vault-sidebar-label"});
-					label.createSpan({cls: "media-vault-sidebar-text", text: collection.value});
-					item.createSpan({cls: "media-vault-count", text: String(collection.count)});
-					item.addEventListener("click", () => {
-						this.plugin.setNavQuery({collections: [collection.value]});
-					});
-				}
-			});
-		}
+		const manualCollections = getManualCollectionEntries(activeAssets, collections);
+		this.renderSection(root, "collections", "Collections", (section) => {
+			if (manualCollections.length === 0) {
+				section.createDiv({cls: "media-vault-hint", text: "在 Inspector 或批量操作中把图片加入 Collection 后，会显示在这里。"});
+				return;
+			}
 
-		const noteCollections = getNoteCollectionEntries(activeAssets, this.plugin.services.assetRepository.getReferences(), MAX_NAV_FACET_ITEMS);
-		if (noteCollections.length > 0) {
-			this.renderSection(root, "obsidian", "Obsidian", (section) => {
-				for (const collection of noteCollections) {
-					const isActive = activeNavQuery?.linkedByNote === collection.notePath;
-					const isUnavailable = !isNotePathAvailable(this.plugin, collection.notePath);
-					const item = section.createDiv({
-						cls: [
-							"media-vault-sidebar-item",
-							isActive ? "is-active" : "",
-							isUnavailable ? "is-unavailable" : "",
-						].filter(Boolean).join(" "),
-					});
-					const label = item.createSpan({cls: "media-vault-sidebar-label"});
-					label.createSpan({cls: "media-vault-sidebar-text", text: getPathBasename(collection.notePath)});
-					if (isUnavailable) {
-						item.createSpan({cls: "media-vault-sidebar-status", text: "不可用"});
-						item.setAttr("aria-disabled", "true");
-						item.setAttr("title", `目标笔记不存在：${collection.notePath}`);
-					} else {
-						item.createSpan({cls: "media-vault-count", text: String(collection.assetIds.size)});
-						item.setAttr("title", collection.notePath);
-						item.addEventListener("click", () => {
-							this.plugin.setNavQuery({linkedByNote: collection.notePath});
-						});
-					}
-				}
-			});
-		}
-
-		const folderCollections = getFolderCollectionEntries(activeAssets, this.plugin.services.assetRepository.getReferences(), MAX_NAV_FACET_ITEMS);
-		if (folderCollections.length > 0) {
-			this.renderSection(root, "projects", "Projects", (section) => {
-				for (const collection of folderCollections) {
-					const isActive = activeNavQuery?.linkedByFolder === collection.folderPath;
-					const isUnavailable = !isFolderPathAvailable(this.plugin, collection.folderPath);
-					const item = section.createDiv({
-						cls: [
-							"media-vault-sidebar-item",
-							isActive ? "is-active" : "",
-							isUnavailable ? "is-unavailable" : "",
-						].filter(Boolean).join(" "),
-					});
-					const label = item.createSpan({cls: "media-vault-sidebar-label"});
-					label.createSpan({cls: "media-vault-sidebar-text", text: getPathBasename(collection.folderPath)});
-					if (isUnavailable) {
-						item.createSpan({cls: "media-vault-sidebar-status", text: "不可用"});
-						item.setAttr("aria-disabled", "true");
-						item.setAttr("title", `目标目录不存在：${collection.folderPath}`);
-					} else {
-						item.createSpan({cls: "media-vault-count", text: String(collection.assetIds.size)});
-						item.setAttr("title", collection.folderPath);
-						item.addEventListener("click", () => {
-							this.plugin.setNavQuery({linkedByFolder: collection.folderPath});
-						});
-					}
-				}
-			});
-		}
+			for (const collection of manualCollections) {
+				const item = section.createDiv({cls: `media-vault-sidebar-item ${isSingleNavValue(activeNavQuery, "collections", collection.value) ? "is-active" : ""}`});
+				const label = item.createSpan({cls: "media-vault-sidebar-label"});
+				label.createSpan({cls: "media-vault-sidebar-text", text: collection.value});
+				item.createSpan({cls: "media-vault-count", text: String(collection.count)});
+				item.addEventListener("click", () => {
+					this.plugin.setNavQuery({collections: [collection.value]});
+				});
+			}
+		});
 
 		const tagCounts = getTopValueCounts(activeAssets, (asset) => asset.tags, MAX_NAV_FACET_ITEMS);
 		if (tagCounts.length > 0) {
@@ -277,80 +205,9 @@ interface CountEntry {
 	count: number;
 }
 
-interface NoteCollectionEntry {
-	notePath: string;
-	assetIds: Set<string>;
-}
-
-interface FolderCollectionEntry {
-	folderPath: string;
-	assetIds: Set<string>;
-}
-
 function isRecentAsset(asset: Asset): boolean {
 	const thirtyDays = 30 * 24 * 60 * 60 * 1000;
 	return Date.now() - asset.mtime <= thirtyDays;
-}
-
-function isNotePathAvailable(plugin: MediaVaultPlugin, notePath: string): boolean {
-	return plugin.app.vault.getAbstractFileByPath(notePath) instanceof TFile;
-}
-
-function isFolderPathAvailable(plugin: MediaVaultPlugin, folderPath: string): boolean {
-	return plugin.app.vault.getAbstractFileByPath(folderPath) instanceof TFolder;
-}
-
-function getSmartCollectionTitle(name: string, linkedByNote: string | undefined, linkedByFolder: string | undefined, isUnavailable: boolean): string {
-	if (!isUnavailable) {
-		return name;
-	}
-	if (linkedByNote) {
-		return `${name}：目标笔记不存在 ${linkedByNote}`;
-	}
-	if (linkedByFolder) {
-		return `${name}：目标目录不存在 ${linkedByFolder}`;
-	}
-	return name;
-}
-
-function getNoteCollectionEntries(assets: Asset[], references: AssetReference[], limit: number): NoteCollectionEntry[] {
-	const activeAssetIds = new Set(assets.map((asset) => asset.id));
-	const byNote = new Map<string, Set<string>>();
-	for (const reference of references) {
-		if (!activeAssetIds.has(reference.assetId)) {
-			continue;
-		}
-		const assetIds = byNote.get(reference.sourceNotePath) ?? new Set<string>();
-		assetIds.add(reference.assetId);
-		byNote.set(reference.sourceNotePath, assetIds);
-	}
-
-	return Array.from(byNote.entries())
-		.map(([notePath, assetIds]) => ({notePath, assetIds}))
-		.sort((a, b) => b.assetIds.size - a.assetIds.size || a.notePath.localeCompare(b.notePath))
-		.slice(0, limit);
-}
-
-function getFolderCollectionEntries(assets: Asset[], references: AssetReference[], limit: number): FolderCollectionEntry[] {
-	const activeAssetIds = new Set(assets.map((asset) => asset.id));
-	const byFolder = new Map<string, Set<string>>();
-	for (const reference of references) {
-		if (!activeAssetIds.has(reference.assetId)) {
-			continue;
-		}
-		const folderPath = getParentPath(reference.sourceNotePath);
-		if (!folderPath) {
-			continue;
-		}
-		const assetIds = byFolder.get(folderPath) ?? new Set<string>();
-		assetIds.add(reference.assetId);
-		byFolder.set(folderPath, assetIds);
-	}
-
-	return Array.from(byFolder.entries())
-		.map(([folderPath, assetIds]) => ({folderPath, assetIds}))
-		.sort((a, b) => b.assetIds.size - a.assetIds.size || a.folderPath.localeCompare(b.folderPath))
-		.slice(0, limit);
 }
 
 function getTopValueCounts(assets: Asset[], getValues: (asset: Asset) => string[], limit: number): CountEntry[] {
@@ -377,11 +234,64 @@ function getTopValueCounts(assets: Asset[], getValues: (asset: Asset) => string[
 		.slice(0, limit);
 }
 
+function getManualCollectionEntries(assets: Asset[], collections: Collection[]): CountEntry[] {
+	const activeAssetsById = new Map(assets.map((asset) => [asset.id, asset]));
+	const countedAssetIdsByKey = new Map<string, Set<string>>();
+	const entries = new Map<string, CountEntry>();
+
+	const ensureEntry = (rawValue: string): CountEntry | null => {
+		const value = rawValue.trim();
+		if (!value) {
+			return null;
+		}
+		const key = value.toLowerCase();
+		const existing = entries.get(key);
+		if (existing) {
+			return existing;
+		}
+		const entry = {value, count: 0};
+		entries.set(key, entry);
+		return entry;
+	};
+
+	const countAsset = (rawValue: string, assetId: string): void => {
+		const entry = ensureEntry(rawValue);
+		if (!entry) {
+			return;
+		}
+		const key = entry.value.toLowerCase();
+		const countedAssetIds = countedAssetIdsByKey.get(key) ?? new Set<string>();
+		if (countedAssetIds.has(assetId)) {
+			return;
+		}
+		countedAssetIds.add(assetId);
+		countedAssetIdsByKey.set(key, countedAssetIds);
+		entry.count += 1;
+	};
+
+	for (const collection of collections) {
+		if (collection.type !== "manual") {
+			continue;
+		}
+		ensureEntry(collection.name);
+		for (const assetId of collection.assetIds ?? []) {
+			if (activeAssetsById.has(assetId)) {
+				countAsset(collection.name, assetId);
+			}
+		}
+	}
+
+	for (const asset of assets) {
+		for (const collection of asset.collections) {
+			countAsset(collection, asset.id);
+		}
+	}
+
+	return Array.from(entries.values())
+		.sort((a, b) => a.value.localeCompare(b.value));
+}
+
 function isSingleNavValue(query: AssetQuery | null, field: "tags" | "colors" | "formats" | "collections", value: string): boolean {
 	const values = query?.[field];
 	return Boolean(values && values.length === 1 && values[0]?.toLowerCase() === value.toLowerCase());
-}
-
-function getPathBasename(filePath: string): string {
-	return filePath.split("/").pop() ?? filePath;
 }
