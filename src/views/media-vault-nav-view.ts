@@ -8,7 +8,7 @@ import {getDuplicateAssetIds} from "../services/search-service";
 const MAX_NAV_FACET_ITEMS = 10;
 const TAG_DOT_COLORS = ["#6c5ce7", "#d09a11", "#d85d72", "#2f9e63", "#3182ce", "#805ad5", "#dd6b20", "#0f766e"];
 
-type NavSectionId = "gallery" | "smart" | "collections" | "tags" | "system";
+type NavSectionId = "gallery" | "smart" | "collections" | "tags";
 
 export class MediaVaultNavView extends ItemView {
 	private readonly plugin: MediaVaultPlugin;
@@ -65,6 +65,7 @@ export class MediaVaultNavView extends ItemView {
 			{id: "favorites", label: "收藏", count: activeAssets.filter((asset) => asset.favorite).length},
 			{id: "recent", label: "最近使用", count: activeAssets.filter(isRecentAsset).length},
 			{id: "duplicates", label: "重复图片", count: getDuplicateAssetIds(activeAssets).size},
+			{id: "trash", label: "回收站", count: trashAssets.length},
 		];
 
 		this.renderSection(root, "gallery", "Gallery", (section) => {
@@ -77,16 +78,6 @@ export class MediaVaultNavView extends ItemView {
 					this.plugin.setQuickFilter(filter.id);
 				});
 			}
-		});
-
-		this.renderSection(root, "system", "System", (section) => {
-			const trash = section.createDiv({cls: `media-vault-sidebar-item ${!hasNavQuery && this.plugin.getQuickFilter() === "trash" ? "is-active" : ""}`});
-			trash.createSpan({text: "回收站"});
-			trash.createSpan({cls: "media-vault-count", text: String(trashAssets.length)});
-			trash.addEventListener("click", () => {
-				this.plugin.setQuickFilter("trash");
-			});
-			section.createDiv({cls: "media-vault-hint", text: "索引、引用和缩略图缓存均可重建。"});
 		});
 
 		const collections = this.plugin.services.assetRepository.getCollections();
