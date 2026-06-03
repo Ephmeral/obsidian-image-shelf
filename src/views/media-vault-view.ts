@@ -5922,11 +5922,6 @@ export class MediaVaultView extends ItemView {
 		element.setAttr("role", "button");
 		element.setAttr("aria-label", `${asset.filename}，${isSelected ? "已选择" : "未选择"}`);
 		element.setAttr("aria-selected", String(isSelected));
-		element.addEventListener("mouseenter", () => {
-			if (this.focusedAssetId !== asset.id) {
-				this.focusAsset(asset.id);
-			}
-		});
 		element.addEventListener("focus", () => {
 			this.preserveMasonryScrollBeforeAssetInteraction(asset.id);
 			this.focusAsset(asset.id);
