@@ -14,10 +14,12 @@ import {getDuplicateAssetIds, getDuplicateCandidates, getDuplicateGroups, type D
 import type {SimilarityCandidate, SimilaritySortOption} from "../services/similarity-service";
 import {getParentPath, joinVaultPath} from "../utils/path-utils";
 import {formatReferenceLocation} from "../utils/reference-utils";
+import {getGalleryPageChange, getGalleryPageSlice, type GalleryPageSlice} from "../utils/gallery-pagination";
 import type {BatchOperationDraft, BatchConvertFormat} from "../types/batch";
 import {loadBatchOperationDraft, saveBatchOperationDraft} from "../storage/plugin-data-store";
 import {parseAssetNoteMetadata} from "../utils/asset-note-metadata";
 import {getOcrAverageConfidence, getProviderLabel} from "../services/ocr-service";
+import type {ThumbnailReadyEvent} from "../services/thumbnail-service";
 
 interface VirtualGridLayout {
 	columns: number;
@@ -248,6 +250,7 @@ export class MediaVaultView extends ItemView {
 	private readonly plugin: MediaVaultPlugin;
 	private unsubscribeRepository: (() => void) | null = null;
 	private unsubscribeUiState: (() => void) | null = null;
+	private unsubscribeThumbnailReady: (() => void) | null = null;
 	private focusedAssetId: string | null = null;
 	private quickFilter: QuickFilterId;
 	private activeCollectionId: string | null = null;
@@ -257,6 +260,7 @@ export class MediaVaultView extends ItemView {
 	private sortOption: SortOption = "mtime-desc";
 	private thumbnailScale = 1;
 	private searchText = "";
+	private currentGalleryPage = 1;
 	private appliedQuery: AssetQuery = {};
 	private appliedQuerySource: "manual" | "nav" | "collection" = "manual";
 	private draftQuery: AssetQuery = {};
@@ -363,6 +367,7 @@ export class MediaVaultView extends ItemView {
 		this.applyPluginFilterSource();
 		await this.restoreSavedBatchDraft();
 		this.unsubscribeRepository = this.plugin.services.assetRepository.subscribe(() => this.render());
+		this.unsubscribeThumbnailReady = this.plugin.services.thumbnailService.subscribeThumbnailReady((event) => this.handleThumbnailReady(event));
 		this.unsubscribeUiState = this.plugin.subscribeUiState(() => {
 			const nextQuickFilter = this.plugin.getQuickFilter();
 			const nextCollectionId = this.plugin.getActiveCollectionId();
@@ -395,7 +400,7 @@ export class MediaVaultView extends ItemView {
 				this.similarityKeepAssetId = null;
 				this.applyPluginFilterSource();
 				this.clearSelection(false);
-				this.gridScrollTop = 0;
+				this.resetGalleryPage();
 				this.focusedAssetId = nextFocusedAssetId;
 				this.render();
 				return;
@@ -422,6 +427,8 @@ export class MediaVaultView extends ItemView {
 		this.unsubscribeRepository = null;
 		this.unsubscribeUiState?.();
 		this.unsubscribeUiState = null;
+		this.unsubscribeThumbnailReady?.();
+		this.unsubscribeThumbnailReady = null;
 		if (this.pendingScrollFrame !== null) {
 			window.cancelAnimationFrame(this.pendingScrollFrame);
 			this.pendingScrollFrame = null;
@@ -635,21 +642,24 @@ export class MediaVaultView extends ItemView {
 		}
 
 		this.quickFilter = this.plugin.getQuickFilter();
-		const assets = this.getFilteredAssets();
+		const filteredAssets = this.getFilteredAssets();
+		const galleryPage = this.getCurrentGalleryPage(filteredAssets.length);
+		const assets = filteredAssets.slice(galleryPage.startIndex, galleryPage.endIndex);
 		this.pruneSelection(assets);
 		const focusedAsset = this.getFocusedAsset(assets);
 		const activeSmartCollection = this.getActiveSmartCollection();
 
 		const main = root.createDiv({cls: "media-vault-main"});
 		this.applyGalleryDisplayFieldClasses(main);
-		this.renderToolbar(main, assets.length);
+		this.renderToolbar(main, filteredAssets.length, galleryPage);
 		if (activeSmartCollection) {
-			this.renderActiveCollectionHeader(main, activeSmartCollection, assets.length);
+			this.renderActiveCollectionHeader(main, activeSmartCollection, filteredAssets.length);
 		} else {
 			this.renderFilterChips(main);
 		}
+		this.renderGalleryPagination(main, galleryPage, filteredAssets.length);
 		if (this.quickFilter === "duplicates") {
-			this.renderDuplicateChecker(main, assets);
+			this.renderDuplicateChecker(main, filteredAssets);
 		}
 		this.renderGallery(main, assets, focusedAsset);
 		this.renderBatchBar(main);
@@ -690,7 +700,7 @@ export class MediaVaultView extends ItemView {
 			item.createSpan({cls: "media-vault-count", text: String(filter.count)});
 			item.addEventListener("click", () => {
 				this.quickFilter = filter.id;
-				this.gridScrollTop = 0;
+				this.resetGalleryPage();
 				this.render();
 			});
 		}
@@ -1145,7 +1155,7 @@ export class MediaVaultView extends ItemView {
 		this.appliedQuerySource = "collection";
 		this.smartBuilderOpen = false;
 		this.filterDrawerOpen = false;
-		this.gridScrollTop = 0;
+		this.resetGalleryPage();
 		this.plugin.setActiveCollection(collection.id);
 		new Notice(`已保存智能集合：${collection.name}，命中 ${hitCount} 张图片。`);
 	}
@@ -3410,12 +3420,76 @@ export class MediaVaultView extends ItemView {
 		}).open();
 	}
 
-	private renderToolbar(main: Element, resultCount: number): void {
+	private getCurrentGalleryPage(totalItems: number): GalleryPageSlice {
+		const page = getGalleryPageSlice({
+			totalItems,
+			pageSize: this.plugin.settings.galleryPageSize,
+			currentPage: this.currentGalleryPage,
+		});
+		this.currentGalleryPage = page.currentPage;
+		return page;
+	}
+
+	private resetGalleryPage(): void {
+		this.currentGalleryPage = 1;
+		this.gridScrollTop = 0;
+	}
+
+	private setGalleryPage(page: number): void {
+		const change = getGalleryPageChange(this.currentGalleryPage, page);
+		if (!change.shouldClearSelection) {
+			return;
+		}
+		this.currentGalleryPage = change.nextPage;
+		this.gridScrollTop = 0;
+		this.clearSelection(false);
+		this.render();
+	}
+
+	private renderGalleryPagination(main: Element, page: GalleryPageSlice, totalItems: number): void {
+		if (totalItems === 0) {
+			return;
+		}
+
+		const pagination = main.createDiv({cls: "media-vault-gallery-pagination"});
+		const summary = page.isPaged
+			? `第 ${page.currentPage} / ${page.totalPages} 页 · 显示 ${page.displayStart}-${page.displayEnd} / 共 ${totalItems.toLocaleString()} 张`
+			: `显示全部 ${totalItems.toLocaleString()} 张`;
+		pagination.createDiv({cls: "media-vault-gallery-pagination-summary", text: summary});
+		if (!page.isPaged) {
+			return;
+		}
+
+		const controls = pagination.createDiv({cls: "media-vault-gallery-pagination-controls"});
+		const previous = controls.createEl("button", {text: "上一页"});
+		previous.disabled = page.currentPage <= 1;
+		previous.addEventListener("click", () => this.setGalleryPage(page.currentPage - 1));
+
+		const pageInput = controls.createEl("input", {
+			attr: {
+				type: "number",
+				min: "1",
+				max: String(page.totalPages),
+				value: String(page.currentPage),
+				"aria-label": "页码",
+			},
+		});
+		pageInput.addEventListener("change", () => this.setGalleryPage(Number(pageInput.value)));
+
+		const next = controls.createEl("button", {text: "下一页"});
+		next.disabled = page.currentPage >= page.totalPages;
+		next.addEventListener("click", () => this.setGalleryPage(page.currentPage + 1));
+	}
+
+	private renderToolbar(main: Element, resultCount: number, page: GalleryPageSlice): void {
 		const toolbar = main.createDiv({cls: "media-vault-toolbar"});
 		const scope = toolbar.createDiv({cls: "media-vault-toolbar-scope"});
 		const scopeRow = scope.createDiv({cls: "media-vault-toolbar-title-row"});
 		scopeRow.createDiv({cls: "media-vault-toolbar-title", text: this.getToolbarTitle()});
-		const result = scopeRow.createDiv({cls: "media-vault-result-count", text: `${resultCount.toLocaleString()} 项`});
+		const countText = page.isPaged
+			? `${resultCount.toLocaleString()} 项 · 第 ${page.currentPage}/${page.totalPages} 页`
+			: `${resultCount.toLocaleString()} 项`;
+		const result = scopeRow.createDiv({cls: "media-vault-result-count", text: countText});
 		result.setAttr("aria-live", "polite");
 
 		const searchWrap = toolbar.createDiv({cls: "media-vault-search-wrap"});
@@ -3430,7 +3504,7 @@ export class MediaVaultView extends ItemView {
 		searchWrap.appendChild(search);
 		search.addEventListener("change", () => {
 			this.searchText = search.value;
-			this.gridScrollTop = 0;
+			this.resetGalleryPage();
 			this.render();
 		});
 
@@ -3566,7 +3640,7 @@ export class MediaVaultView extends ItemView {
 		}
 		sortSelect.addEventListener("change", () => {
 			this.sortOption = parseSortOption(sortSelect.value);
-			this.gridScrollTop = 0;
+			this.resetGalleryPage();
 			this.render();
 		});
 		sortRow.createSpan({cls: "media-vault-layout-sort-direction is-active", text: "↓"});
@@ -3741,7 +3815,7 @@ export class MediaVaultView extends ItemView {
 			this.appliedQuery = {};
 			this.appliedQuerySource = "manual";
 			this.plugin.setActiveCollection(null);
-			this.gridScrollTop = 0;
+			this.resetGalleryPage();
 			this.render();
 		});
 	}
@@ -5216,6 +5290,8 @@ export class MediaVaultView extends ItemView {
 		);
 		const startIndex = startRow * layout.columns;
 		const endIndex = Math.min(this.virtualAssets.length, endRow * layout.columns);
+		const prewarmEndIndex = Math.min(this.virtualAssets.length, endIndex + Math.max(0, endIndex - startIndex));
+		this.plugin.services.thumbnailService.prewarmGalleryThumbnails(this.virtualAssets.slice(startIndex, prewarmEndIndex));
 
 		for (let index = startIndex; index < endIndex; index += 1) {
 			const asset = this.virtualAssets[index];
@@ -5248,9 +5324,15 @@ export class MediaVaultView extends ItemView {
 		const overscanHeight = (this.getMasonryMaxPreviewHeight() + this.getCardBodyHeight() + MASONRY_GAP) * 2;
 		const startY = Math.max(0, this.gridScrollTop - overscanHeight);
 		const endY = this.gridScrollTop + viewportHeight + overscanHeight;
+		const prewarmEndY = endY + viewportHeight;
+		const prewarmAssets: Asset[] = [];
 
 		for (const item of items) {
-			if (item.y + item.cardHeight < startY || item.y > endY) {
+			if (item.y + item.cardHeight < startY || item.y > prewarmEndY) {
+				continue;
+			}
+			prewarmAssets.push(item.asset);
+			if (item.y > endY) {
 				continue;
 			}
 
@@ -5261,6 +5343,7 @@ export class MediaVaultView extends ItemView {
 			card.style.left = `${item.x}px`;
 			card.style.top = `${item.y}px`;
 		}
+		this.plugin.services.thumbnailService.prewarmGalleryThumbnails(prewarmAssets);
 		this.removeHiddenVirtualCards(visibleAssetIds);
 	}
 
@@ -5303,6 +5386,81 @@ export class MediaVaultView extends ItemView {
 				this.virtualRenderedCards.delete(assetId);
 			}
 		}
+	}
+
+	private handleThumbnailReady(event: ThumbnailReadyEvent): void {
+		if (event.variant !== "small") {
+			return;
+		}
+		const asset = this.plugin.services.assetRepository.getAssetById(event.assetId);
+		if (!asset || asset.mtime !== event.mtime) {
+			return;
+		}
+
+		this.updateVisibleGalleryThumbnail(asset, event.resourcePath);
+	}
+
+	private updateVisibleGalleryThumbnail(asset: Asset, resourcePath: string): void {
+		const card = this.virtualRenderedCards.get(asset.id);
+		const cardPreview = card?.querySelector<HTMLElement>(".media-vault-card-preview");
+		if (cardPreview) {
+			this.renderGalleryThumbnail(cardPreview, asset, resourcePath, true);
+		}
+
+		const rows = this.contentEl.querySelectorAll(".media-vault-row");
+		for (let index = 0; index < rows.length; index += 1) {
+			const row = rows.item(index) as HTMLElement;
+			if (row.dataset.mediaVaultAssetId !== asset.id) {
+				continue;
+			}
+			const rowPreview = row.querySelector<HTMLElement>(".media-vault-row-thumb");
+			if (rowPreview) {
+				this.renderGalleryThumbnail(rowPreview, asset, resourcePath, false);
+			}
+		}
+	}
+
+	private renderPendingGalleryThumbnail(preview: HTMLElement): void {
+		preview.empty();
+		preview.removeClass("has-error");
+		preview.addClass("is-thumbnail-pending");
+	}
+
+	private renderGalleryThumbnail(preview: HTMLElement, asset: Asset, resourcePath: string, trackRatio: boolean): void {
+		const existing = preview.querySelector<HTMLImageElement>("img");
+		if (existing?.getAttribute("src") === resourcePath) {
+			preview.removeClass("is-thumbnail-pending");
+			return;
+		}
+
+		preview.empty();
+		preview.removeClass("is-thumbnail-pending");
+		preview.removeClass("has-error");
+		const img = preview.createEl("img", {attr: {loading: "lazy", decoding: "async", src: resourcePath, alt: asset.filename}});
+		if (trackRatio) {
+			this.observeGalleryThumbnailRatio(img, asset, preview);
+			return;
+		}
+		img.addEventListener("error", () => preview.addClass("has-error"));
+	}
+
+	private observeGalleryThumbnailRatio(img: HTMLImageElement, asset: Asset, preview: HTMLElement): void {
+		img.addEventListener("load", () => {
+			if (img.naturalWidth <= 0 || img.naturalHeight <= 0) {
+				return;
+			}
+
+			const ratio = img.naturalWidth / img.naturalHeight;
+			const previousRatio = this.imageAspectRatios.get(asset.id) ?? getPersistedAspectRatio(asset);
+			if (!previousRatio || Math.abs(previousRatio - ratio) > 0.02) {
+				this.imageAspectRatios.set(asset.id, ratio);
+				if (this.viewMode === "masonry") {
+					this.pendingRatioUpdates.add(asset.id);
+					this.scheduleDebouncedRatioRefresh();
+				}
+			}
+		});
+		img.addEventListener("error", () => preview.addClass("has-error"));
 	}
 
 	private getVirtualGridLayout(gallery: HTMLElement): VirtualGridLayout {
@@ -5774,27 +5932,11 @@ export class MediaVaultView extends ItemView {
 		if (previewHeight) {
 			preview.style.height = `${previewHeight}px`;
 		}
-		const resourcePath = this.plugin.services.thumbnailService.getResourcePath(asset);
+		const resourcePath = this.plugin.services.thumbnailService.getGalleryResourcePath(asset);
 		if (resourcePath) {
-			const img = preview.createEl("img", {attr: {loading: "lazy", decoding: "async", src: resourcePath, alt: asset.filename}});
-			img.addEventListener("load", () => {
-				if (img.naturalWidth <= 0 || img.naturalHeight <= 0) {
-					return;
-				}
-
-				const ratio = img.naturalWidth / img.naturalHeight;
-				const previousRatio = this.imageAspectRatios.get(asset.id) ?? getPersistedAspectRatio(asset);
-				if (!previousRatio || Math.abs(previousRatio - ratio) > 0.02) {
-					this.imageAspectRatios.set(asset.id, ratio);
-					if (this.viewMode === "masonry") {
-						this.pendingRatioUpdates.add(asset.id);
-						this.scheduleDebouncedRatioRefresh();
-					}
-				}
-			});
-			img.addEventListener("error", () => preview.addClass("has-error"));
+			this.renderGalleryThumbnail(preview, asset, resourcePath, true);
 		} else {
-			preview.createDiv({cls: "media-vault-missing-preview", text: "Missing"});
+			this.renderPendingGalleryThumbnail(preview);
 		}
 
 		const body = card.createDiv({cls: "media-vault-card-body"});
@@ -5889,10 +6031,12 @@ export class MediaVaultView extends ItemView {
 			});
 		}
 		const thumbnail = row.createDiv({cls: "media-vault-row-thumb"});
-		const resourcePath = this.plugin.services.thumbnailService.getResourcePath(asset);
-		if (resourcePath) {
-			thumbnail.createEl("img", {attr: {loading: "lazy", decoding: "async", src: resourcePath, alt: asset.filename}});
-		}
+			const resourcePath = this.plugin.services.thumbnailService.getGalleryResourcePath(asset);
+			if (resourcePath) {
+				this.renderGalleryThumbnail(thumbnail, asset, resourcePath, false);
+			} else {
+				this.renderPendingGalleryThumbnail(thumbnail);
+			}
 		row.createDiv({cls: "media-vault-row-name media-vault-field-filename", text: asset.filename});
 		row.createDiv({cls: "media-vault-row-description media-vault-field-description", text: this.getAssetDescription(asset)});
 		row.createDiv({cls: "media-vault-field-extension", text: asset.ext.toUpperCase()});
@@ -6823,7 +6967,7 @@ export class MediaVaultView extends ItemView {
 			this.appliedQuerySource = "manual";
 		}
 		this.filterDrawerOpen = false;
-		this.gridScrollTop = 0;
+		this.resetGalleryPage();
 		this.render();
 	}
 
@@ -6856,7 +7000,7 @@ export class MediaVaultView extends ItemView {
 			this.appliedQuery = removeKeywordFromQuery(normalized);
 			this.appliedQuerySource = "collection";
 			this.filterDrawerOpen = false;
-			this.gridScrollTop = 0;
+			this.resetGalleryPage();
 			this.plugin.setActiveCollection(collection.id);
 			new Notice("已保存智能集合。");
 		}).open();
@@ -6889,7 +7033,7 @@ export class MediaVaultView extends ItemView {
 		this.searchText = normalized.keyword ?? "";
 		this.appliedQuery = removeKeywordFromQuery(normalized);
 		this.appliedQuerySource = "collection";
-		this.gridScrollTop = 0;
+		this.resetGalleryPage();
 		new Notice("已更新智能集合规则。");
 		this.render();
 	}
@@ -7127,7 +7271,7 @@ export class MediaVaultView extends ItemView {
 			this.appliedQuerySource = "manual";
 			this.plugin.setActiveCollection(null);
 		}
-		this.gridScrollTop = 0;
+		this.resetGalleryPage();
 		this.render();
 	}
 

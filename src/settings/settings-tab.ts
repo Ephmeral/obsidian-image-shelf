@@ -1,7 +1,20 @@
 import {App, PluginSettingTab, Setting} from "obsidian";
 import type MediaVaultPlugin from "../main";
+import {normalizeGalleryPageSize, type GalleryPageSize} from "../utils/gallery-pagination";
+import {getThumbnailPresetConfig, type ThumbnailQualityPreset} from "../services/thumbnail-presets";
 
 const ASSET_NOTE_DIRECTORY_PLACEHOLDER = "Assets/Asset Notes/";
+const THUMBNAIL_QUALITY_LABELS: Record<ThumbnailQualityPreset, string> = {
+	space: "省空间",
+	balanced: "均衡",
+	quality: "高清",
+};
+const GALLERY_PAGE_SIZE_LABELS: Record<GalleryPageSize, string> = {
+	0: "全部",
+	100: "100",
+	200: "200",
+	500: "500",
+};
 
 export class MediaVaultSettingTab extends PluginSettingTab {
 	private readonly plugin: MediaVaultPlugin;
@@ -70,6 +83,42 @@ export class MediaVaultSettingTab extends PluginSettingTab {
 				.onClick(() => {
 					void this.plugin.rebuildThumbnailCache(true);
 				}));
+
+		new Setting(containerEl)
+			.setName("缩略图清晰度")
+			.setDesc("影响首页缩略图清晰度和缓存体积；切换后会按新设置懒生成缓存。")
+			.addDropdown((dropdown) => {
+				for (const [value, label] of Object.entries(THUMBNAIL_QUALITY_LABELS)) {
+					dropdown.addOption(value, label);
+				}
+				dropdown
+					.setValue(this.plugin.settings.thumbnailQualityPreset)
+					.onChange(async (value) => {
+						const preset = value as ThumbnailQualityPreset;
+						const config = getThumbnailPresetConfig(preset);
+						this.plugin.settings.thumbnailQualityPreset = preset;
+						this.plugin.settings.thumbnailSizes = {
+							small: config.small,
+							large: config.large,
+						};
+						await this.plugin.saveSettings();
+					});
+			});
+
+		new Setting(containerEl)
+			.setName("每页图片数量")
+			.setDesc("限制首页单页图片数量，降低大图库的布局和预热开销。")
+			.addDropdown((dropdown) => {
+				for (const [value, label] of Object.entries(GALLERY_PAGE_SIZE_LABELS)) {
+					dropdown.addOption(value, value === "0" ? label : `${label} 张`);
+				}
+				dropdown
+					.setValue(String(this.plugin.settings.galleryPageSize))
+					.onChange(async (value) => {
+						this.plugin.settings.galleryPageSize = normalizeGalleryPageSize(Number(value));
+						await this.plugin.saveSettings();
+					});
+			});
 
 			new Setting(containerEl)
 				.setName("移动端只读降级")

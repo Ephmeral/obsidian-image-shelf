@@ -786,6 +786,46 @@
 	background: var(--background-secondary);
 }
 
+.media-vault-gallery-pagination {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 10px;
+	padding: 8px 14px;
+	border-bottom: 1px solid var(--background-modifier-border);
+	background: color-mix(in srgb, var(--background-secondary) 86%, var(--background-primary));
+	color: var(--text-muted);
+	font-size: 12px;
+}
+
+.media-vault-gallery-pagination-summary {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.media-vault-gallery-pagination-controls {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	flex: 0 0 auto;
+}
+
+.media-vault-gallery-pagination-controls input {
+	width: 62px;
+	height: 28px;
+	min-height: 28px;
+	text-align: center;
+}
+
+.media-vault-gallery-pagination-controls button {
+	height: 28px;
+	min-height: 28px;
+	padding: 0 10px;
+	font-size: 12px;
+}
+
 .media-vault-collection-header {
 	display: grid;
 	gap: 10px;
@@ -4745,8 +4785,17 @@
 	background: color-mix(in srgb, var(--background-secondary-alt) 82%, #111827);
 }
 
+.media-vault-card-preview.is-thumbnail-pending,
+.media-vault-row-thumb.is-thumbnail-pending {
+	background: color-mix(in srgb, var(--background-secondary-alt) 88%, var(--background-primary));
+}
+
 .media-vault-card.is-masonry .media-vault-card-preview {
 	background: var(--background-secondary-alt);
+}
+
+.media-vault-card.is-masonry .media-vault-card-preview.is-thumbnail-pending {
+	background: color-mix(in srgb, var(--background-secondary-alt) 88%, var(--background-primary));
 }
 
 .media-vault-card-preview img {

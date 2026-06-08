@@ -3,8 +3,18 @@ import type {MediaVaultSettings} from "../settings/defaults";
 import type {Asset, AssetThumbnailState} from "../types/asset";
 import type {AssetRepository} from "./asset-repository";
 import type {JobQueueService} from "./task-queue";
+import {resolveThumbnailResourcePolicy, type ThumbnailResourceVariant} from "./thumbnail-resource-policy";
+import {getThumbnailPresetConfig, resolveThumbnailQualityPreset} from "./thumbnail-presets";
 
-export type ThumbnailVariant = "small" | "large";
+export type ThumbnailVariant = ThumbnailResourceVariant;
+export interface ThumbnailReadyEvent {
+	assetId: string;
+	mtime: number;
+	variant: ThumbnailVariant;
+	resourcePath: string;
+}
+
+type ThumbnailReadyListener = (event: ThumbnailReadyEvent) => void;
 
 interface ThumbnailJob {
 	asset: Asset;
@@ -72,6 +82,7 @@ export class ThumbnailService {
 	private rebuildTracker: ThumbnailRebuildTracker | null = null;
 	private readonly resourcePathCache = new Map<string, string | null>();
 	private readonly pendingThumbnailStateUpdates = new Map<string, PendingThumbnailStateUpdate>();
+	private readonly thumbnailReadyListeners = new Set<ThumbnailReadyListener>();
 	private thumbnailStateFlushTimeout: number | null = null;
 	private thumbnailStateFlushPromise: Promise<void> | null = null;
 
@@ -84,7 +95,7 @@ export class ThumbnailService {
 	}
 
 	getResourcePath(asset: Asset, variant: ThumbnailVariant = "small"): string | null {
-		const cacheKey = `${asset.id}:${asset.mtime}:${variant}`;
+		const cacheKey = this.getResourcePathCacheKey(asset, variant);
 		const cached = this.resourcePathCache.get(cacheKey);
 		if (cached !== undefined) {
 			return cached;
@@ -95,22 +106,44 @@ export class ThumbnailService {
 		return result;
 	}
 
-	private resolveResourcePath(asset: Asset, variant: ThumbnailVariant): string | null {
-		const cached = this.getCachedResourcePath(asset, variant);
+	getGalleryResourcePath(asset: Asset): string | null {
+		if (!this.canUsePersistentCache()) {
+			return this.getOriginalResourcePath(asset);
+		}
+
+		const cached = this.getCachedResourcePath(asset, "small");
 		if (cached) {
 			return cached;
 		}
 
-		this.requestThumbnail(asset, variant);
-		if (variant === "large") {
-			const small = this.getCachedResourcePath(asset, "small");
-			if (small) {
-				return small;
-			}
+		this.requestThumbnail(asset, "small");
+		return null;
+	}
+
+	prewarmGalleryThumbnails(assets: Asset[]): void {
+		for (const asset of assets) {
 			this.requestThumbnail(asset, "small");
 		}
+	}
 
-		return this.getOriginalResourcePath(asset);
+	subscribeThumbnailReady(listener: ThumbnailReadyListener): () => void {
+		this.thumbnailReadyListeners.add(listener);
+		return () => this.thumbnailReadyListeners.delete(listener);
+	}
+
+	private resolveResourcePath(asset: Asset, variant: ThumbnailVariant): string | null {
+		const cached = this.getCachedResourcePath(asset, variant);
+		const result = resolveThumbnailResourcePolicy({
+			variant,
+			cached,
+			cachedSmall: variant === "large" ? this.getCachedResourcePath(asset, "small") : undefined,
+			original: this.getOriginalResourcePath(asset),
+			allowOriginalFallback: true,
+		});
+		for (const requestedVariant of result.requestedVariants) {
+			this.requestThumbnail(asset, requestedVariant);
+		}
+		return result.resourcePath;
 	}
 
 	requestThumbnail(asset: Asset, variant: ThumbnailVariant = "small"): void {
@@ -202,7 +235,8 @@ export class ThumbnailService {
 			const field = job.variant === "large" ? "thumb800" : "thumb300";
 			this.queueThumbnailStateUpdate(job.asset, field, generated);
 			this.pruneCacheIfNeeded();
-			this.resourcePathCache.delete(`${job.asset.id}:${job.asset.mtime}:${job.variant}`);
+			this.resourcePathCache.delete(this.getResourcePathCacheKey(job.asset, job.variant));
+			this.notifyThumbnailReady(job.asset, job.variant, generated);
 		} catch {
 			// 缩略图失败不应影响图库浏览，保留原图资源路径兜底。
 		} finally {
@@ -306,6 +340,26 @@ export class ThumbnailService {
 		await this.thumbnailStateFlushPromise;
 	}
 
+	private notifyThumbnailReady(asset: Asset, variant: ThumbnailVariant, generated: GeneratedThumbnail): void {
+		const resourcePath = this.toFileResourcePath(generated.relativePath);
+		if (!resourcePath) {
+			return;
+		}
+		const event = {
+			assetId: asset.id,
+			mtime: asset.mtime,
+			variant,
+			resourcePath,
+		};
+		for (const listener of this.thumbnailReadyListeners) {
+			try {
+				listener(event);
+			} catch {
+				// 缩略图通知只影响当前视图刷新，不应中断后台缓存任务。
+			}
+		}
+	}
+
 	private async generateThumbnail(asset: Asset, variant: ThumbnailVariant): Promise<GeneratedThumbnail | null> {
 		const file = this.app.vault.getAbstractFileByPath(asset.filePath);
 		if (!(file instanceof TFile)) {
@@ -334,7 +388,7 @@ export class ThumbnailService {
 			context.imageSmoothingQuality = "high";
 			context.drawImage(image, 0, 0, canvas.width, canvas.height);
 
-			const blob = await canvasToBlob(canvas, "image/webp", 0.82);
+			const blob = await canvasToBlob(canvas, "image/webp", this.getThumbnailQuality());
 			if (!blob) {
 				return null;
 			}
@@ -382,14 +436,30 @@ export class ThumbnailService {
 	}
 
 	private getVariantSize(variant: ThumbnailVariant): number {
-		const settings = this.getSettings();
-		return variant === "large" ? settings.thumbnailSizes.large : settings.thumbnailSizes.small;
+		const config = this.getThumbnailPresetConfig();
+		return variant === "large" ? config.large : config.small;
 	}
 
 	private getRelativeCachePath(asset: Asset, variant: ThumbnailVariant): string {
 		const size = this.getVariantSize(variant);
-		const cacheId = `${hashText(asset.id)}-${asset.mtime}-${size}`;
+		const cacheId = `${hashText(asset.id)}-${asset.mtime}-${this.getThumbnailCacheSignature()}-${size}`;
 		return [...this.getCacheRelativeRootParts(), `${cacheId}.webp`].join("/");
+	}
+
+	private getResourcePathCacheKey(asset: Asset, variant: ThumbnailVariant): string {
+		return `${asset.id}:${asset.mtime}:${variant}:${this.getThumbnailCacheSignature()}`;
+	}
+
+	private getThumbnailQuality(): number {
+		return this.getThumbnailPresetConfig().quality;
+	}
+
+	private getThumbnailCacheSignature(): string {
+		return this.getThumbnailPresetConfig().cacheSignature;
+	}
+
+	private getThumbnailPresetConfig() {
+		return getThumbnailPresetConfig(resolveThumbnailQualityPreset(this.getSettings().thumbnailQualityPreset));
 	}
 
 	private cacheFileExists(relativePath: string): boolean {

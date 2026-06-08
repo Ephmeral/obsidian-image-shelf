@@ -1,6 +1,8 @@
 import type {Plugin} from "obsidian";
 import {loadPluginData, savePluginData} from "../storage/plugin-data-store";
 import type {MediaVaultGalleryDisplayFields} from "../types/gallery";
+import {normalizeGalleryPageSize, type GalleryPageSize} from "../utils/gallery-pagination";
+import {getThumbnailPresetConfig, resolveThumbnailQualityPreset, type ThumbnailQualityPreset} from "../services/thumbnail-presets";
 
 export interface ThumbnailSizeSettings {
 	small: number;
@@ -16,7 +18,9 @@ export interface MediaVaultSettings {
 	imageNamingTemplate: string;
 	defaultDeleteBehavior: "trash";
 	thumbnailSizes: ThumbnailSizeSettings;
+	thumbnailQualityPreset: ThumbnailQualityPreset;
 	thumbnailCacheLimitMb: number;
+	galleryPageSize: GalleryPageSize;
 	enableDominantColor: boolean;
 	enableSha256: boolean;
 	enablePerceptualHash: boolean;
@@ -50,10 +54,12 @@ export const DEFAULT_SETTINGS: MediaVaultSettings = {
 	imageNamingTemplate: "{{type}}_{{date}}_{{hash8}}_{{slug}}.{{ext}}",
 	defaultDeleteBehavior: "trash",
 	thumbnailSizes: {
-		small: 300,
-		large: 800,
+		small: 360,
+		large: 900,
 	},
+	thumbnailQualityPreset: "balanced",
 	thumbnailCacheLimitMb: 1024,
+	galleryPageSize: 200,
 	enableDominantColor: true,
 	enableSha256: true,
 	enablePerceptualHash: false,
@@ -66,13 +72,17 @@ export const DEFAULT_SETTINGS: MediaVaultSettings = {
 };
 
 export function normalizeMediaVaultSettings(settings: Partial<MediaVaultSettings> | undefined): MediaVaultSettings {
+	const thumbnailQualityPreset = resolveThumbnailQualityPreset(settings?.thumbnailQualityPreset);
+	const thumbnailPreset = getThumbnailPresetConfig(thumbnailQualityPreset);
 	return {
 		...DEFAULT_SETTINGS,
 		...settings,
 		thumbnailSizes: {
-			...DEFAULT_SETTINGS.thumbnailSizes,
-			...settings?.thumbnailSizes,
+			small: thumbnailPreset.small,
+			large: thumbnailPreset.large,
 		},
+		thumbnailQualityPreset,
+		galleryPageSize: normalizeGalleryPageSize(settings?.galleryPageSize),
 		galleryDisplayFields: {
 			...DEFAULT_GALLERY_DISPLAY_FIELDS,
 			...settings?.galleryDisplayFields,
