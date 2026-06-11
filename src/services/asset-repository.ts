@@ -1,8 +1,6 @@
 import type {Plugin} from "obsidian";
 import {INDEX_SCHEMA_VERSION} from "../constants";
 import {createEmptyIndexSnapshot, type Annotation, type Asset, type AssetReference, type Collection, type ImageGalleryIndexSnapshot} from "../types/asset";
-import type {AIMetadataSuggestion} from "../types/ai";
-import type {OcrResult} from "../types/ocr";
 import {loadPluginData, savePluginData} from "../storage/plugin-data-store";
 
 type RepositoryListener = () => void;
@@ -22,8 +20,6 @@ function normalizeSnapshot(snapshot: Partial<ImageGalleryIndexSnapshot> | undefi
 			references: Array.isArray(snapshot.references) ? snapshot.references : [],
 			collections: Array.isArray(snapshot.collections) ? snapshot.collections : [],
 			annotations: Array.isArray(snapshot.annotations) ? snapshot.annotations : [],
-			ocrResults: Array.isArray(snapshot.ocrResults) ? snapshot.ocrResults : [],
-			aiSuggestions: Array.isArray(snapshot.aiSuggestions) ? snapshot.aiSuggestions : [],
 			updatedAt: typeof snapshot.updatedAt === "number" ? snapshot.updatedAt : Date.now(),
 		};
 	}
@@ -34,8 +30,6 @@ export class AssetRepository {
 	private references: AssetReference[] = [];
 	private collections: Collection[] = [];
 	private annotations: Annotation[] = [];
-	private readonly ocrResults = new Map<string, OcrResult>();
-	private readonly aiSuggestions = new Map<string, AIMetadataSuggestion>();
 	private readonly listeners = new Set<RepositoryListener>();
 
 	constructor(plugin: Plugin) {
@@ -54,8 +48,6 @@ export class AssetRepository {
 				references: [...this.references],
 				collections: [...this.collections],
 				annotations: [...this.annotations],
-				ocrResults: this.getOcrResults(),
-				aiSuggestions: this.getAiSuggestions(),
 				updatedAt: Date.now(),
 			};
 	}
@@ -103,28 +95,6 @@ export class AssetRepository {
 
 	getCollections(): Collection[] {
 		return [...this.collections].sort((a, b) => a.name.localeCompare(b.name));
-	}
-
-	getOcrResults(): OcrResult[] {
-		return [...this.ocrResults.values()].sort((a, b) => b.createdAt - a.createdAt);
-	}
-
-	getOcrResult(assetId: string | null | undefined): OcrResult | undefined {
-		if (!assetId) {
-			return undefined;
-		}
-		return this.ocrResults.get(assetId);
-	}
-
-	getAiSuggestions(): AIMetadataSuggestion[] {
-		return [...this.aiSuggestions.values()].sort((a, b) => b.createdAt - a.createdAt);
-	}
-
-	getAiSuggestion(assetId: string | null | undefined): AIMetadataSuggestion | undefined {
-		if (!assetId) {
-			return undefined;
-		}
-		return this.aiSuggestions.get(assetId);
 	}
 
 	getCollectionById(collectionId: string | null | undefined): Collection | undefined {
@@ -425,23 +395,6 @@ export class AssetRepository {
 		await this.persistAndNotify();
 	}
 
-	async upsertOcrResult(result: OcrResult): Promise<void> {
-		this.ocrResults.set(result.assetId, result);
-		await this.persistAndNotify();
-	}
-
-	async deleteOcrResult(assetId: string): Promise<void> {
-		if (!this.ocrResults.delete(assetId)) {
-			return;
-		}
-		await this.persistAndNotify();
-	}
-
-	async upsertAiSuggestion(suggestion: AIMetadataSuggestion): Promise<void> {
-		this.aiSuggestions.set(suggestion.assetId, suggestion);
-		await this.persistAndNotify();
-	}
-
 	private applySnapshot(snapshot: ImageGalleryIndexSnapshot): void {
 		this.assets.clear();
 		for (const asset of snapshot.assets) {
@@ -450,14 +403,6 @@ export class AssetRepository {
 		this.references = snapshot.references;
 		this.collections = snapshot.collections;
 		this.annotations = snapshot.annotations;
-		this.ocrResults.clear();
-		for (const result of snapshot.ocrResults) {
-			this.ocrResults.set(result.assetId, result);
-		}
-		this.aiSuggestions.clear();
-		for (const suggestion of snapshot.aiSuggestions) {
-			this.aiSuggestions.set(suggestion.assetId, suggestion);
-		}
 		this.notify();
 	}
 

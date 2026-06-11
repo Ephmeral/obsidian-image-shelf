@@ -22,7 +22,6 @@ export interface AssetQuery {
 	collections?: string[];
 	ratingGte?: number;
 	referenced?: boolean;
-	hasOcr?: boolean;
 	hasAnnotation?: boolean;
 	minReferenceCount?: number;
 	colors?: string[];

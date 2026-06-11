@@ -92,23 +92,6 @@ export function registerCommands(plugin: MediaVaultPlugin): void {
 	});
 
 	plugin.addCommand({
-		id: "show-recommended-images-for-current-note",
-		name: "Show recommended images for current note",
-		checkCallback: (checking) => {
-			const hasFile = Boolean(plugin.getActiveMarkdownFile());
-			if (checking) {
-				return hasFile;
-			}
-			if (!hasFile) {
-				new Notice("当前没有打开的 Markdown 笔记。");
-				return false;
-			}
-			void plugin.openRecommendations();
-			return true;
-		},
-	});
-
-	plugin.addCommand({
 		id: "compress-selected-images",
 		name: "Compress selected images",
 		callback: () => {
@@ -159,22 +142,6 @@ export function registerCommands(plugin: MediaVaultPlugin): void {
 	});
 
 	plugin.addCommand({
-		id: "open-ocr-panel",
-		name: "Open text recognition panel",
-		callback: () => {
-			void plugin.openCommandTargetAssetDetail("ocr");
-		},
-	});
-
-	plugin.addCommand({
-		id: "generate-ai-tag-suggestions",
-		name: "Generate AI tag suggestions",
-		callback: () => {
-			void plugin.openCommandTargetAiSuggestions();
-		},
-	});
-
-	plugin.addCommand({
 		id: "create-asset-note",
 		name: "Create asset note",
 		callback: () => {
@@ -204,14 +171,6 @@ export function registerCommands(plugin: MediaVaultPlugin): void {
 			}
 			void plugin.demoteFocusedAssetToCurrentNoteAttachment();
 			return true;
-		},
-	});
-
-	plugin.addCommand({
-		id: "create-annotation-for-current-image",
-		name: "Create annotation for current image",
-		callback: () => {
-			void plugin.openCommandTargetAssetDetail("annotation");
 		},
 	});
 

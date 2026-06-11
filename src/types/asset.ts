@@ -1,6 +1,4 @@
 import {INDEX_SCHEMA_VERSION} from "../constants";
-import type {AIMetadataSuggestion} from "./ai";
-import type {OcrResult} from "./ocr";
 
 export const DEFAULT_ANNOTATION_COLOR = "#5a50d8";
 
@@ -106,8 +104,6 @@ export interface ImageGalleryIndexSnapshot {
 	references: AssetReference[];
 	collections: Collection[];
 	annotations: Annotation[];
-	ocrResults: OcrResult[];
-	aiSuggestions: AIMetadataSuggestion[];
 	updatedAt: number;
 }
 
@@ -118,8 +114,6 @@ export function createEmptyIndexSnapshot(): ImageGalleryIndexSnapshot {
 			references: [],
 			collections: [],
 			annotations: [],
-			ocrResults: [],
-			aiSuggestions: [],
 			updatedAt: Date.now(),
 		};
 	}

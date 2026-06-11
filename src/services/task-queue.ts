@@ -1,4 +1,4 @@
-export type MediaVaultJobType = "index" | "thumbnail" | "color" | "hash" | "references" | "similarity" | "ocr" | "ai" | "asset-note-sync";
+export type MediaVaultJobType = "index" | "thumbnail" | "color" | "hash" | "references" | "similarity" | "asset-note-sync";
 export type MediaVaultJobStatus = "queued" | "running" | "succeeded" | "failed" | "canceled" | "paused";
 export type MediaVaultJobPriority = "low" | "normal" | "high";
 

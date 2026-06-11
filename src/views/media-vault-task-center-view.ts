@@ -9,8 +9,6 @@ const SUMMARY_TYPES: Array<{type: MediaVaultJobType; label: string}> = [
 	{type: "hash", label: "Hash"},
 	{type: "references", label: "引用索引"},
 	{type: "similarity", label: "相似度"},
-	{type: "ocr", label: "OCR"},
-	{type: "ai", label: "AI 标签"},
 	{type: "asset-note-sync", label: "Asset Note"},
 	{type: "index", label: "图片索引"},
 ];
@@ -159,12 +157,7 @@ export class MediaVaultTaskCenterView extends ItemView {
 
 	private openJobTarget(job: MediaVaultJob): void {
 		if (job.assetId) {
-			const asset = this.plugin.services.assetRepository.getAssetById(job.assetId);
-			if (job.type === "ai" && asset) {
-				void this.plugin.openAiSuggestionsForAsset(asset);
-				return;
-			}
-			void this.plugin.openAssetDetailInGallery(job.assetId, job.type === "ocr" ? "ocr" : "detail");
+			void this.plugin.openAssetDetailInGallery(job.assetId);
 			return;
 		}
 		if (job.error) {
@@ -180,13 +173,6 @@ export class MediaVaultTaskCenterView extends ItemView {
 		if (job.type === "index" || job.type === "references") {
 			void this.plugin.rebuildIndex(true);
 			return;
-		}
-		if (job.type === "ai" && job.assetId) {
-			const asset = this.plugin.services.assetRepository.getAssetById(job.assetId);
-			if (asset) {
-				void this.plugin.openAiSuggestionsForAsset(asset);
-				return;
-			}
 		}
 		new Notice("该任务类型暂未接入重试。");
 	}

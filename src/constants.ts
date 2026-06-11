@@ -2,7 +2,6 @@ export const MEDIA_VAULT_VIEW_TYPE = "image-shelf";
 export const MEDIA_VAULT_NAV_VIEW_TYPE = "image-shelf-nav";
 export const MEDIA_VAULT_INSPECTOR_VIEW_TYPE = "image-shelf-inspector";
 export const MEDIA_VAULT_TASK_CENTER_VIEW_TYPE = "image-shelf-task-center";
-export const MEDIA_VAULT_RECOMMENDATIONS_VIEW_TYPE = "image-shelf-recommendations";
 
 export const PLUGIN_DISPLAY_NAME = "Image Shelf";
 

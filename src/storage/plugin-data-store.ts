@@ -1,14 +1,12 @@
 import type {Plugin} from "obsidian";
 import type {ImageGalleryIndexSnapshot} from "../types/asset";
 import type {BatchOperationDraft} from "../types/batch";
-import type {RecommendationDismissal} from "../services/recommendation-service";
 import type {MediaVaultSettings} from "../settings/defaults";
 
 export interface ImageGalleryPluginData {
 	settings?: Partial<MediaVaultSettings>;
 	index?: Partial<ImageGalleryIndexSnapshot>;
 	batchOperationDraft?: Partial<BatchOperationDraft>;
-	recommendationDismissals?: RecommendationDismissal[];
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

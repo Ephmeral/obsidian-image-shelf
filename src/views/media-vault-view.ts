@@ -7,7 +7,6 @@ import {DEFAULT_GALLERY_DISPLAY_FIELDS} from "../settings/defaults";
 import type {MediaVaultGalleryDisplayField, MediaVaultGallerySortOption as SortOption, MediaVaultGalleryViewMode as GalleryViewMode} from "../types/gallery";
 import type {OperationLog} from "../types/operation-log";
 import type {AssetQuery, QuickFilterId} from "../types/query";
-import type {OcrRect, OcrResult} from "../types/ocr";
 import {formatDate, formatDateTime, formatFileSize} from "../utils/image-utils";
 import {createEmptySmartCondition, getDefaultOperator, getDefaultValue, type SmartCollectionDraft, type SmartCondition, type SmartConditionField, type SmartConditionOperator} from "../services/collection-service";
 import {getDuplicateAssetIds, getDuplicateCandidates, getDuplicateGroups, type DuplicateGroup} from "../services/search-service";
@@ -18,7 +17,6 @@ import {getGalleryPageChange, getGalleryPageSlice, type GalleryPageSlice} from "
 import type {BatchOperationDraft, BatchConvertFormat} from "../types/batch";
 import {loadBatchOperationDraft, saveBatchOperationDraft} from "../storage/plugin-data-store";
 import {parseAssetNoteMetadata} from "../utils/asset-note-metadata";
-import {getOcrAverageConfidence, getProviderLabel} from "../services/ocr-service";
 import type {ThumbnailReadyEvent} from "../services/thumbnail-service";
 
 interface VirtualGridLayout {
@@ -144,8 +142,6 @@ const SMART_CONDITION_FIELDS: Array<{id: SmartConditionField; label: string}> = 
 	{id: "color", label: "颜色"},
 	{id: "unused", label: "未引用"},
 	{id: "source", label: "来源"},
-	{id: "has-ocr", label: "有 OCR"},
-	{id: "has-annotation", label: "有标注"},
 ];
 const SMART_CONDITION_OPERATORS: Array<{id: SmartConditionOperator; label: string}> = [
 	{id: "contains", label: "包含"},
@@ -155,7 +151,7 @@ const SMART_CONDITION_OPERATORS: Array<{id: SmartConditionOperator; label: strin
 	{id: "exists", label: "存在"},
 ];
 
-const BOOLEAN_SMART_FIELDS = new Set<SmartConditionField>(["unused", "has-ocr", "has-annotation"]);
+const BOOLEAN_SMART_FIELDS = new Set<SmartConditionField>(["unused"]);
 
 type NumericQueryField = "minSizeKb" | "maxSizeKb" | "minWidth" | "maxWidth" | "minHeight" | "maxHeight" | "minReferenceCount" | "ratingGte";
 type DateQueryField = "createdAfter" | "createdBefore" | "modifiedAfter" | "modifiedBefore";
@@ -305,10 +301,6 @@ export class MediaVaultView extends ItemView {
 	private selectedAnnotationId: string | null = null;
 	private annotationDraft = createEmptyAnnotationDraft();
 	private suppressNextAnnotationClick = false;
-	private ocrDraftAssetId: string | null = null;
-	private ocrDraftText = "";
-	private ocrDraftLanguage = "auto";
-	private selectedOcrBlockIndex: number | null = null;
 	private gridScrollTop = 0;
 	private pendingScrollFrame: number | null = null;
 	private protectedScrollTop: number | null = null;
@@ -1176,10 +1168,6 @@ export class MediaVaultView extends ItemView {
 				this.plugin.closeAssetDetail();
 			});
 		});
-		const annotate = actions.createEl("button", {text: "新建区域标注"});
-		annotate.addEventListener("click", () => {
-			this.startNewAnnotationMode(asset);
-		});
 		if (asset.status === "trash") {
 			const restore = actions.createEl("button", {cls: "mod-cta", text: "恢复图片"});
 			restore.addEventListener("click", () => {
@@ -1731,32 +1719,13 @@ export class MediaVaultView extends ItemView {
 		canvas.createDiv({cls: "media-vault-detail-canvas-hint", text: "双指缩放 · 滚轮缩放 · 拖拽平移"});
 		const resourcePath = this.getDetailImageResourcePath(asset);
 		if (resourcePath) {
-			const selectedAnnotation = this.getSelectedAnnotation(asset);
-			const imageWrap = canvas.createDiv({cls: `media-vault-detail-image-wrap ${selectedAnnotation ? "has-selected-annotation" : ""} ${this.detailZoom !== 1 || this.detailPanX !== 0 || this.detailPanY !== 0 ? "is-zoomed" : ""}`});
-			const imageStage = imageWrap.createDiv({cls: `media-vault-detail-image-stage ${selectedAnnotation ? "is-focused" : ""}`});
-			imageStage.style.setProperty("--media-vault-detail-zoom", String(this.getDetailImageScale(Boolean(selectedAnnotation))));
+			const imageWrap = canvas.createDiv({cls: `media-vault-detail-image-wrap ${this.detailZoom !== 1 || this.detailPanX !== 0 || this.detailPanY !== 0 ? "is-zoomed" : ""}`});
+			const imageStage = imageWrap.createDiv({cls: "media-vault-detail-image-stage"});
+			imageStage.style.setProperty("--media-vault-detail-zoom", String(this.getDetailImageScale(false)));
 			imageStage.style.setProperty("--media-vault-detail-pan-x", `${this.detailPanX}px`);
 			imageStage.style.setProperty("--media-vault-detail-pan-y", `${this.detailPanY}px`);
-			if (selectedAnnotation) {
-				const focusX = clamp(selectedAnnotation.x + selectedAnnotation.width / 2, 0, 1);
-				const focusY = clamp(selectedAnnotation.y + selectedAnnotation.height / 2, 0, 1);
-				imageStage.style.setProperty("--media-vault-annotation-focus-x", `${focusX * 100}%`);
-				imageStage.style.setProperty("--media-vault-annotation-focus-y", `${focusY * 100}%`);
-				imageWrap.createDiv({cls: "media-vault-annotation-focus-caption", text: `已定位：${selectedAnnotation.label}`});
-			}
 			imageStage.createEl("img", {attr: {src: resourcePath, alt: asset.filename}});
-			if (this.detailTab === "annotations" && this.detailMode === "annotation") {
-				imageStage.addClass("is-annotating");
-				imageStage.tabIndex = 0;
-				imageStage.addEventListener("pointerdown", () => imageStage.focus());
-				imageStage.createDiv({cls: "media-vault-annotation-drag-hint", text: "拖拽图片区域创建或调整标注框；标注信息在右侧检查器维护。"});
-				this.enableAnnotationDragSelection(imageStage);
-			}
-			this.renderAnnotationOverlays(imageStage, asset);
-			if (this.detailTab === "ocr") {
-				this.renderOcrOverlays(imageStage, asset);
-			}
-			this.renderDetailZoomControls(canvas, asset);
+			this.renderDetailZoomControls(canvas);
 			this.renderDetailMiniMap(canvas);
 		} else {
 			canvas.createDiv({cls: "media-vault-empty-title", text: "无法读取图片资源"});
@@ -1774,12 +1743,10 @@ export class MediaVaultView extends ItemView {
 
 	private renderDetailOverview(parent: Element, asset: Asset): void {
 		const references = this.plugin.services.assetRepository.getReferencesForAsset(asset.id);
-		const annotations = this.plugin.services.assetRepository.getAnnotationsForAsset(asset.id);
 		const summary = parent.createDiv({cls: "media-vault-asset-note-summary"});
 		this.renderAssetNoteSummaryItem(summary, "尺寸", asset.width && asset.height ? `${asset.width} x ${asset.height}` : "未知");
 		this.renderAssetNoteSummaryItem(summary, "大小", formatFileSize(asset.sizeBytes));
 		this.renderAssetNoteSummaryItem(summary, "引用", `${references.length} 处`);
-		this.renderAssetNoteSummaryItem(summary, "标注", `${annotations.length} 个`);
 		this.renderAssetNoteSummaryItem(summary, "标签", asset.tags.length > 0 ? asset.tags.map((tag) => `#${tag}`).join("、") : "无");
 		this.renderAssetNoteSummaryItem(summary, "Collections", asset.collections.length > 0 ? asset.collections.join("、") : "无");
 
@@ -1834,189 +1801,12 @@ export class MediaVaultView extends ItemView {
 		}
 		}
 
-		private renderOcrPanel(parent: Element, asset: Asset): void {
-			const result = this.plugin.services.ocrService.getResult(asset.id);
-			this.prepareOcrDraft(asset, result);
-
-			const panel = parent.createDiv({cls: "media-vault-ocr-panel"});
-			const preview = panel.createDiv({cls: "media-vault-ocr-preview-panel"});
-			preview.createDiv({cls: "media-vault-section-title", text: "识别区域"});
-			const imageWrap = preview.createDiv({cls: "media-vault-ocr-preview"});
-			const resourcePath = this.getDetailImageResourcePath(asset);
-			if (resourcePath) {
-				imageWrap.createEl("img", {attr: {src: resourcePath, alt: asset.filename, loading: "lazy", decoding: "async"}});
-			}
-			if (result) {
-				this.renderOcrPreviewOverlays(imageWrap, result);
-			} else {
-				imageWrap.createDiv({cls: "media-vault-ocr-empty-overlay", text: "暂无识别区域"});
-			}
-
-			const side = panel.createDiv({cls: "media-vault-ocr-side"});
-			const head = side.createDiv({cls: "media-vault-ocr-head"});
-			const title = head.createDiv();
-			title.createDiv({cls: "media-vault-section-title", text: "识别文本"});
-			title.createDiv({
-				cls: "media-vault-hint",
-				text: result ? "当前显示已保存的本地识别结果，可编辑后覆盖。" : "当前版本不上传图片；先支持粘贴系统或本地识别结果。",
-			});
-			const status = head.createDiv({cls: `media-vault-ocr-status ${result ? "is-ready" : "is-empty"}`});
-			status.createDiv({text: result ? `${result.text.length} 字` : "未保存"});
-			status.createDiv({text: result ? `${result.blocks.length} 块 · ${getOcrAverageConfidence(result)}%` : "local"});
-
-			const meta = side.createDiv({cls: "media-vault-ocr-meta"});
-			this.renderOcrMetaItem(meta, "来源", result ? getProviderLabel(result.provider) : "local");
-			this.renderOcrMetaItem(meta, "语言", result?.language ?? this.ocrDraftLanguage);
-			this.renderOcrMetaItem(meta, "更新时间", result ? formatDateTime(result.updatedAt ?? result.createdAt) : "未保存");
-
-			const form = side.createDiv({cls: "media-vault-ocr-form"});
-			const languageField = form.createDiv({cls: "media-vault-filter-field"});
-			languageField.createEl("label", {text: "语言"});
-			const language = languageField.createEl("input", {
-				cls: "media-vault-filter-input",
-				attr: {
-					type: "text",
-					placeholder: "自动或语言代码",
-					value: this.ocrDraftLanguage,
-				},
-			});
-			language.value = this.ocrDraftLanguage;
-			language.addEventListener("input", () => {
-				this.ocrDraftLanguage = language.value.trim() || "auto";
-			});
-
-			const textField = form.createDiv({cls: "media-vault-filter-field"});
-			textField.createEl("label", {text: "识别文本"});
-			const textarea = textField.createEl("textarea", {
-				cls: "media-vault-ocr-textarea",
-				attr: {
-					placeholder: "粘贴识别文本，保存后可复制、搜索或写入素材笔记。",
-				},
-			});
-			textarea.value = this.ocrDraftText;
-
-			const actions = side.createDiv({cls: "media-vault-detail-actions media-vault-ocr-actions"});
-			const save = actions.createEl("button", {cls: "mod-cta", text: result ? "保存修改" : "保存识别文本"});
-			save.disabled = this.ocrDraftText.trim().length === 0;
-			textarea.addEventListener("input", () => {
-				this.ocrDraftText = textarea.value;
-				save.disabled = this.ocrDraftText.trim().length === 0;
-			});
-			save.addEventListener("click", () => void this.saveOcrDraft(asset));
-
-			const copy = actions.createEl("button", {text: "复制文本"});
-			copy.disabled = !result?.text.trim();
-			copy.addEventListener("click", () => void this.plugin.copyAssetOcrText(asset));
-
-			const write = actions.createEl("button", {text: "写入素材笔记"});
-			write.disabled = !result?.text.trim();
-			write.addEventListener("click", () => void this.plugin.writeOcrResultToAssetNote(asset));
-
-			const clear = actions.createEl("button", {text: "清空结果"});
-			clear.disabled = !result;
-			clear.addEventListener("click", () => void this.deleteOcrResult(asset));
-
-			this.renderOcrBlocks(side, result);
-		}
-
-		private renderOcrMetaItem(parent: Element, label: string, value: string): void {
-			const item = parent.createDiv({cls: "media-vault-ocr-meta-item"});
-			item.createSpan({text: label});
-			item.createDiv({text: value});
-		}
-
-		private renderOcrBlocks(parent: Element, result: OcrResult | undefined): void {
-			parent.createDiv({cls: "media-vault-section-title", text: "文本块"});
-			if (!result || result.blocks.length === 0) {
-				parent.createDiv({cls: "media-vault-hint", text: "保存文本后会按段落生成可定位的识别文本块。"});
-				return;
-			}
-
-			const list = parent.createDiv({cls: "media-vault-ocr-block-list"});
-			for (const [index, block] of result.blocks.entries()) {
-				const item = list.createEl("button", {cls: `media-vault-ocr-block ${this.selectedOcrBlockIndex === index ? "is-active" : ""}`});
-				item.createDiv({cls: "media-vault-ocr-block-text", text: block.text});
-				item.createDiv({
-					cls: "media-vault-ocr-block-meta",
-					text: `${Math.round(block.confidence * 100)}% · ${formatOcrRect(block.rect)}`,
-				});
-				item.addEventListener("click", () => {
-					this.selectedOcrBlockIndex = index;
-					this.render();
-				});
-			}
-		}
-
-		private renderOcrPreviewOverlays(parent: HTMLElement, result: OcrResult): void {
-			const layer = parent.createDiv({cls: "media-vault-ocr-layer"});
-			for (const [index, block] of result.blocks.entries()) {
-				const box = layer.createEl("button", {cls: `media-vault-ocr-box ${this.selectedOcrBlockIndex === index ? "is-active" : ""}`});
-				setOcrRectStyle(box, block.rect);
-				box.setAttr("aria-label", block.text);
-				box.addEventListener("click", () => {
-					this.selectedOcrBlockIndex = index;
-					this.render();
-				});
-			}
-		}
-
-		private renderOcrOverlays(parent: HTMLElement, asset: Asset): void {
-			const result = this.plugin.services.ocrService.getResult(asset.id);
-			if (!result || result.blocks.length === 0) {
-				return;
-			}
-			this.renderOcrPreviewOverlays(parent, result);
-		}
-
-		private prepareOcrDraft(asset: Asset, result: OcrResult | undefined): void {
-			if (this.ocrDraftAssetId === asset.id) {
-				return;
-			}
-			this.ocrDraftAssetId = asset.id;
-			this.ocrDraftText = result?.text ?? "";
-			this.ocrDraftLanguage = result?.language ?? "auto";
-			this.selectedOcrBlockIndex = null;
-		}
-
-		private async saveOcrDraft(asset: Asset): Promise<void> {
-			const text = this.ocrDraftText.trim();
-			if (!text) {
-				new Notice("请先填写识别文本。");
-				return;
-			}
-			try {
-				const result = await this.plugin.services.ocrService.saveLocalText(asset, text, this.ocrDraftLanguage);
-				this.ocrDraftText = result.text;
-				this.ocrDraftLanguage = result.language ?? "auto";
-				this.selectedOcrBlockIndex = null;
-				new Notice("已保存识别文本。");
-			} catch (error) {
-				new Notice(`识别文本保存失败：${getErrorMessage(error)}`);
-			}
-		}
-
-		private async deleteOcrResult(asset: Asset): Promise<void> {
-			try {
-				await this.plugin.services.ocrService.deleteResult(asset.id);
-				this.ocrDraftText = "";
-				this.ocrDraftLanguage = "auto";
-				this.selectedOcrBlockIndex = null;
-				new Notice("已清空识别文本。");
-			} catch (error) {
-				new Notice(`识别文本清空失败：${getErrorMessage(error)}`);
-			}
-		}
-
-		private renderDetailRightPanel(parent: Element, asset: Asset): void {
+			private renderDetailRightPanel(parent: Element, asset: Asset): void {
 			const right = parent.createDiv({cls: "media-vault-detail-right"});
 		const references = this.plugin.services.assetRepository.getReferencesForAsset(asset.id);
-		const annotations = this.plugin.services.assetRepository.getAnnotationsForAsset(asset.id);
-		if (this.detailTab === "annotations") {
-			this.renderAnnotationAssistPanel(right, asset);
-		}
 
 		right.createDiv({cls: "media-vault-section-title", text: "关系图谱"});
-		this.renderDetailGraph(right, asset, references, annotations);
+		this.renderDetailGraph(right, asset, references);
 
 		right.createDiv({cls: "media-vault-section-title", text: "引用上下文"});
 		if (references.length === 0) {
@@ -2032,56 +1822,6 @@ export class MediaVaultView extends ItemView {
 			});
 		}
 
-		right.createDiv({cls: "media-vault-section-title", text: "区域标注"});
-		if (annotations.length === 0) {
-			right.createDiv({cls: "media-vault-hint", text: "暂无标注。"});
-		}
-		for (const annotation of annotations) {
-			const linkStatus = this.getAnnotationLinkStatus(annotation, asset.notePath ?? asset.filePath);
-			const item = right.createDiv({cls: `media-vault-annotation-list-item ${this.selectedAnnotationId === annotation.id ? "is-active" : ""}`});
-			item.addClass(`is-link-${linkStatus.state}`);
-			item.style.setProperty("--media-vault-annotation-color", getAnnotationColor(annotation.color));
-			const row = item.createDiv({cls: "media-vault-annotation-list-head"});
-			const title = row.createDiv({cls: "media-vault-annotation-title"});
-			title.createSpan({cls: "media-vault-annotation-color-dot"});
-			title.createSpan({cls: "media-vault-reference-path", text: annotation.label});
-			const actions = row.createDiv({cls: "media-vault-annotation-list-actions"});
-			const locate = actions.createEl("button", {text: "定位"});
-			locate.addEventListener("click", (event) => {
-				event.stopPropagation();
-				this.focusAnnotation(annotation);
-			});
-			const edit = actions.createEl("button", {text: "编辑"});
-			edit.addEventListener("click", (event) => {
-				event.stopPropagation();
-				this.editAnnotation(annotation);
-			});
-			const open = actions.createEl("button", {text: "打开"});
-			open.disabled = linkStatus.state !== "ok";
-			open.addEventListener("click", (event) => {
-				event.stopPropagation();
-				void this.plugin.openAnnotationTarget(annotation, asset.notePath ?? asset.filePath);
-			});
-			const remove = actions.createEl("button", {cls: "mod-warning", text: "删除"});
-			remove.addEventListener("click", (event) => {
-				event.stopPropagation();
-				this.deleteAnnotation(annotation);
-			});
-			const meta = item.createDiv({cls: "media-vault-annotation-meta"});
-			meta.createSpan({cls: "media-vault-annotation-storage-chip", text: getAnnotationStorageLabel(getAnnotationStorageMode(annotation))});
-			const linkText = buildAnnotationLinkText(annotation);
-			if (linkText) {
-				meta.createSpan({cls: "media-vault-annotation-link-chip", text: `[[${linkText}]]`});
-			}
-			meta.createSpan({cls: `media-vault-annotation-link-status is-${linkStatus.state}`, text: linkStatus.label});
-			item.createDiv({cls: "media-vault-reference-context", text: annotation.text ?? linkText ?? "未填写说明"});
-			item.addEventListener("click", () => {
-				this.focusAnnotation(annotation);
-			});
-			item.addEventListener("dblclick", () => {
-				void this.plugin.openAnnotationTarget(annotation, asset.notePath ?? asset.filePath);
-			});
-		}
 	}
 
 	private renderAnnotationAssistPanel(parent: Element, asset: Asset): void {
@@ -2117,7 +1857,7 @@ export class MediaVaultView extends ItemView {
 		}
 	}
 
-	private renderDetailZoomControls(parent: Element, asset: Asset): void {
+	private renderDetailZoomControls(parent: Element): void {
 		const controls = parent.createDiv({cls: "media-vault-detail-zoom-bar"});
 		const zoomOut = controls.createEl("button", {
 			text: "−",
@@ -2150,16 +1890,6 @@ export class MediaVaultView extends ItemView {
 			this.detailPanY = 0;
 			this.render();
 		});
-		const annotationMode = controls.createEl("button", {
-			cls: this.isAnnotationEditMode() ? "is-active" : "",
-			text: this.isAnnotationEditMode() ? "框选区域" : "标注模式",
-		});
-		annotationMode.addEventListener("click", () => {
-			if (this.isAnnotationEditMode()) {
-				return;
-			}
-			this.startNewAnnotationMode(asset);
-		});
 	}
 
 	private adjustDetailZoom(delta: number): void {
@@ -2174,13 +1904,13 @@ export class MediaVaultView extends ItemView {
 		return this.detailZoom;
 	}
 
-	private renderDetailGraph(parent: Element, asset: Asset, references: AssetReference[], annotations: Annotation[]): void {
+	private renderDetailGraph(parent: Element, asset: Asset, references: AssetReference[]): void {
 		const graph = parent.createDiv({cls: "media-vault-graph-card"});
 		const center = graph.createDiv({cls: "media-vault-graph-center"});
 		center.createDiv({cls: "media-vault-graph-node is-center", text: asset.filename});
 		center.createDiv({
 			cls: "media-vault-graph-summary",
-			text: `${references.length} 引用 · ${asset.tags.length} 标签 · ${annotations.length} 标注`,
+			text: `${references.length} 引用 · ${asset.tags.length} 标签`,
 		});
 
 		const groups = graph.createDiv({cls: "media-vault-graph-groups"});
@@ -2199,9 +1929,6 @@ export class MediaVaultView extends ItemView {
 		})));
 		const extensionNodes: Array<GraphNodeData | null> = [
 			asset.notePath ? {label: getPathBasename(asset.notePath), detail: "Asset Note", onClick: () => void this.plugin.openReference(asset.notePath as string)} : null,
-			annotations.length > 0 ? {label: `${annotations.length} 个区域标注`, detail: "Annotations", onClick: () => {
-				this.plugin.setDetailPanel("annotations");
-			}} : null,
 		];
 		this.renderGraphGroup(groups, "扩展节点", extensionNodes.filter((item): item is GraphNodeData => item !== null));
 	}
@@ -2554,37 +2281,19 @@ export class MediaVaultView extends ItemView {
 	}
 
 	private renderAnnotationsPanel(parent: Element, asset: Asset): void {
-		if (this.isAnnotationEditMode()) {
-			this.renderAnnotationEditor(parent, asset);
-			return;
-		}
-
 		const annotations = this.plugin.services.assetRepository.getAnnotationsForAsset(asset.id);
 		const head = parent.createDiv({cls: "media-vault-annotation-tab-head"});
 		const title = head.createDiv();
 		title.createDiv({cls: "media-vault-section-title", text: `区域标注 ${annotations.length}`});
 		title.createDiv({
 			cls: "media-vault-hint",
-			text: "点击标注会在大图中定位；编辑、跳转和删除需要显式操作。",
+			text: "当前版本不再提供区域标注创建入口；已有标注数据会继续保留。",
 		});
-		const actions = head.createDiv({cls: "media-vault-annotation-tab-actions"});
-		const create = actions.createEl("button", {cls: "mod-cta", text: "新建区域标注"});
-		create.addEventListener("click", () => this.startNewAnnotationMode(asset));
-		if (this.selectedAnnotationId) {
-			const selectedAnnotation = this.getSelectedAnnotation(asset);
-			const editSelected = actions.createEl("button", {text: "编辑选中"});
-			editSelected.disabled = !selectedAnnotation;
-			editSelected.addEventListener("click", () => {
-				if (selectedAnnotation) {
-					this.editAnnotation(selectedAnnotation);
-				}
-			});
-		}
 
 		if (annotations.length === 0) {
 			const empty = parent.createDiv({cls: "media-vault-annotation-empty"});
 			empty.createDiv({cls: "media-vault-empty-title", text: "暂无区域标注"});
-			empty.createDiv({text: "进入标注模式后，在图片上拖拽框选区域并绑定 Obsidian 笔记、标题或块引用。"});
+			empty.createDiv({text: "已有标注数据会继续保留，但不再从主界面创建新标注。"});
 			return;
 		}
 
@@ -3164,7 +2873,6 @@ export class MediaVaultView extends ItemView {
 	}
 
 		private renderMetadataPanel(parent: Element, asset: Asset): void {
-			const ocrResult = this.plugin.services.ocrService.getResult(asset.id);
 			this.renderMetadataSection(parent, "文件", [
 			["ID", asset.id],
 			["文件名", asset.filename],
@@ -3182,7 +2890,6 @@ export class MediaVaultView extends ItemView {
 		this.renderMetadataSection(parent, "索引", [
 			["引用次数", `${asset.referenceCount} 处`],
 				["区域标注", `${this.plugin.services.assetRepository.getAnnotationsForAsset(asset.id).length} 个`],
-				["文本识别", ocrResult ? `${ocrResult.text.length} 字 · ${ocrResult.blocks.length} 块` : "未保存"],
 				["Asset Note", asset.notePath ?? "未创建"],
 			["收藏", asset.favorite ? "是" : "否"],
 			["评分", typeof asset.rating === "number" ? `${asset.rating} 星` : "未评分"],
@@ -3895,11 +3602,10 @@ export class MediaVaultView extends ItemView {
 		});
 
 		const body = drawer.createDiv({cls: "media-vault-filter-drawer-body"});
-		this.renderKeywordField(body, hitCount);
-		this.renderFormatField(body, hitCount);
-		this.renderReferenceField(body, hitCount);
-		this.renderContentStateField(body, hitCount);
-		this.renderLinkedScopeField(body, "关联笔记", "linkedByNote", "例如 Notes/Projects/项目复盘 2025.md", hitCount);
+			this.renderKeywordField(body, hitCount);
+			this.renderFormatField(body, hitCount);
+			this.renderReferenceField(body, hitCount);
+			this.renderLinkedScopeField(body, "关联笔记", "linkedByNote", "例如 Notes/Projects/项目复盘 2025.md", hitCount);
 		this.renderLinkedScopeField(body, "关联目录", "linkedByFolder", "例如 Notes/Projects", hitCount);
 		this.renderRatingField(body, hitCount);
 		this.renderNumberRangeField(body, "大小", "minSizeKb", "maxSizeKb", "最小 KB", "最大 KB", hitCount);
@@ -4016,35 +3722,6 @@ export class MediaVaultView extends ItemView {
 			const button = row.createEl("button", {cls: active ? "is-active" : "", text: option.label});
 			button.addEventListener("click", () => {
 				this.draftQuery.referenced = option.value;
-				this.draftQuery = normalizeQuery(this.draftQuery);
-				this.render();
-			});
-		}
-		this.updateDraftHitCount(hitCount);
-	}
-
-	private renderContentStateField(parent: Element, hitCount: HTMLElement): void {
-		this.renderBooleanFilterSegment(parent, "文本识别", "hasOcr", [
-			{label: "全部", value: undefined},
-			{label: "有 OCR", value: true},
-			{label: "无 OCR", value: false},
-		], hitCount);
-		this.renderBooleanFilterSegment(parent, "区域标注", "hasAnnotation", [
-			{label: "全部", value: undefined},
-			{label: "有标注", value: true},
-			{label: "无标注", value: false},
-		], hitCount);
-	}
-
-	private renderBooleanFilterSegment(parent: Element, label: string, queryField: "hasOcr" | "hasAnnotation", options: Array<{label: string; value: boolean | undefined}>, hitCount: HTMLElement): void {
-		const field = parent.createDiv({cls: "media-vault-filter-field"});
-		field.createEl("label", {text: label});
-		const row = field.createDiv({cls: "media-vault-filter-segment"});
-		for (const option of options) {
-			const active = this.draftQuery[queryField] === option.value || (typeof this.draftQuery[queryField] !== "boolean" && option.value === undefined);
-			const button = row.createEl("button", {cls: active ? "is-active" : "", text: option.label});
-			button.addEventListener("click", () => {
-				this.draftQuery[queryField] = option.value;
 				this.draftQuery = normalizeQuery(this.draftQuery);
 				this.render();
 			});
@@ -6129,21 +5806,9 @@ export class MediaVaultView extends ItemView {
 			.setTitle("打开图片详情")
 			.setIcon("image")
 			.onClick(() => this.plugin.openAssetDetail(asset.id)));
-			menu.addItem((item) => item
-				.setTitle("创建区域标注")
-				.setIcon("scan-line")
-				.onClick(() => this.plugin.openAssetDetail(asset.id, "annotation")));
-			menu.addItem((item) => item
-				.setTitle("录入识别文本")
-				.setIcon("text-search")
-				.onClick(() => this.plugin.openAssetDetail(asset.id, "ocr")));
-			menu.addItem((item) => item
-				.setTitle("生成 AI 标签建议")
-				.setIcon("sparkles")
-				.onClick(() => void this.plugin.openAiSuggestionsForAsset(asset)));
-			menu.addItem((item) => item
-				.setTitle("在笔记中查看引用")
-				.setIcon("links-coming-in")
+		menu.addItem((item) => item
+			.setTitle("在笔记中查看引用")
+			.setIcon("links-coming-in")
 			.onClick(() => this.openAssetReferences(asset)));
 		menu.addSeparator();
 		menu.addItem((item) => item
@@ -7184,12 +6849,6 @@ export class MediaVaultView extends ItemView {
 		if (typeof query.referenced === "boolean") {
 			chips.push({label: query.referenced ? "已引用" : "未引用", remove: () => this.removeFilterField("referenced")});
 		}
-		if (typeof query.hasOcr === "boolean") {
-			chips.push({label: query.hasOcr ? "有 OCR" : "无 OCR", remove: () => this.removeFilterField("hasOcr")});
-		}
-		if (typeof query.hasAnnotation === "boolean") {
-			chips.push({label: query.hasAnnotation ? "有标注" : "无标注", remove: () => this.removeFilterField("hasAnnotation")});
-		}
 		if (typeof query.minReferenceCount === "number") {
 			chips.push({label: `引用 ≥ ${query.minReferenceCount}`, remove: () => this.removeFilterField("minReferenceCount")});
 		}
@@ -7805,17 +7464,6 @@ function setAnnotationRectStyle(element: HTMLElement, rect: AnnotationRect): voi
 	element.style.height = `${rect.height * 100}%`;
 }
 
-function setOcrRectStyle(element: HTMLElement, rect: OcrRect): void {
-	element.style.left = `${clamp(rect.x, 0, 1) * 100}%`;
-	element.style.top = `${clamp(rect.y, 0, 1) * 100}%`;
-	element.style.width = `${clamp(rect.width, 0, 1) * 100}%`;
-	element.style.height = `${clamp(rect.height, 0, 1) * 100}%`;
-}
-
-function formatOcrRect(rect: OcrRect): string {
-	return `${formatAnnotationPercent(rect.x)} / ${formatAnnotationPercent(rect.y)} / ${formatAnnotationPercent(rect.width)} / ${formatAnnotationPercent(rect.height)}`;
-}
-
 function setAnnotationColorStyle(element: HTMLElement, color: string | undefined): void {
 	element.style.setProperty("--media-vault-annotation-color", getAnnotationColor(color));
 }
@@ -7853,7 +7501,6 @@ function cloneQuery(query: AssetQuery | undefined): AssetQuery {
 		collections: query.collections ? [...query.collections] : undefined,
 		ratingGte: query.ratingGte,
 		referenced: query.referenced,
-		hasOcr: query.hasOcr,
 		hasAnnotation: query.hasAnnotation,
 		minReferenceCount: query.minReferenceCount,
 		colors: query.colors ? [...query.colors] : undefined,
@@ -7927,9 +7574,6 @@ function normalizeQuery(query: AssetQuery | undefined): AssetQuery {
 	}
 	if (typeof source.referenced === "boolean") {
 		normalized.referenced = source.referenced;
-	}
-	if (typeof source.hasOcr === "boolean") {
-		normalized.hasOcr = source.hasOcr;
 	}
 	if (typeof source.hasAnnotation === "boolean") {
 		normalized.hasAnnotation = source.hasAnnotation;
@@ -8071,9 +7715,6 @@ function getSmartConditionPlaceholder(field: SmartConditionField): string {
 	}
 	if (field === "unused") {
 		return "true";
-	}
-	if (field === "has-ocr" || field === "has-annotation") {
-		return "true / false";
 	}
 	return "输入值";
 }

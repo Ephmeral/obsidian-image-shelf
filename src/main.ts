@@ -1,5 +1,5 @@
 import {Editor, FileSystemAdapter, MarkdownPostProcessorContext, MarkdownView, Menu, normalizePath, Notice, Plugin, stripHeadingForLink, TAbstractFile, TFile, TFolder, WorkspaceLeaf} from "obsidian";
-import {MEDIA_VAULT_INSPECTOR_VIEW_TYPE, MEDIA_VAULT_NAV_VIEW_TYPE, MEDIA_VAULT_RECOMMENDATIONS_VIEW_TYPE, MEDIA_VAULT_TASK_CENTER_VIEW_TYPE, MEDIA_VAULT_VIEW_TYPE, PLUGIN_DISPLAY_NAME} from "./constants";
+import {MEDIA_VAULT_INSPECTOR_VIEW_TYPE, MEDIA_VAULT_NAV_VIEW_TYPE, MEDIA_VAULT_TASK_CENTER_VIEW_TYPE, MEDIA_VAULT_VIEW_TYPE, PLUGIN_DISPLAY_NAME} from "./constants";
 import {registerCommands} from "./commands";
 import {createMediaVaultServices, type MediaVaultServices} from "./services";
 import {loadMediaVaultSettings, MediaVaultSettingTab, saveMediaVaultSettings, type MediaVaultSettings} from "./settings";
@@ -10,20 +10,16 @@ import type {AssetQuery, QuickFilterId} from "./types/query";
 import {MediaVaultInspectorView} from "./views/media-vault-inspector-view";
 import {InsertImageSuggest} from "./views/insert-image-suggest";
 import {MediaVaultNavView} from "./views/media-vault-nav-view";
-import {MediaVaultRecommendationsView} from "./views/media-vault-recommendations-view";
 import {MediaVaultTaskCenterView} from "./views/media-vault-task-center-view";
 import {MediaVaultView} from "./views/media-vault-view";
-import {AiSuggestionModal} from "./views/ai-suggestion-modal";
 import {RebuildIndexConfirmModal} from "./views/rebuild-index-confirm-modal";
-import {mergeTags} from "./services/ai-metadata-service";
 import {getAssetNoteSyncedFieldLabels, parseAssetNoteMetadata, toAssetNoteAnnotations, toAssetNoteMetadataPatch} from "./utils/asset-note-metadata";
 import {getFileExtension, getFilename, getParentPath, isSupportedImagePath, joinVaultPath, stripLeadingSlash} from "./utils/path-utils";
-import type {AIMetadataSuggestion, AiSuggestionWriteTarget} from "./types/ai";
 
 type UiStateListener = () => void;
 type AnnotationLinkState = "none" | "ok" | "missing-note" | "missing-heading" | "missing-block";
-export type MediaVaultDetailMode = "detail" | "annotation" | "references" | "ocr";
-export type MediaVaultDetailPanelId = "overview" | "asset-note" | "references" | "annotations" | "ocr" | "versions" | "metadata";
+export type MediaVaultDetailMode = "detail" | "annotation" | "references";
+export type MediaVaultDetailPanelId = "overview" | "asset-note" | "references" | "annotations" | "versions" | "metadata";
 export type BatchDeleteMode = "trash" | "archive" | "permanent";
 
 interface AnnotationLinkStatus {
@@ -140,7 +136,6 @@ export default class MediaVaultPlugin extends Plugin {
 		this.registerView(MEDIA_VAULT_VIEW_TYPE, (leaf) => new MediaVaultView(leaf, this));
 		this.registerView(MEDIA_VAULT_INSPECTOR_VIEW_TYPE, (leaf) => new MediaVaultInspectorView(leaf, this));
 		this.registerView(MEDIA_VAULT_TASK_CENTER_VIEW_TYPE, (leaf) => new MediaVaultTaskCenterView(leaf, this));
-		this.registerView(MEDIA_VAULT_RECOMMENDATIONS_VIEW_TYPE, (leaf) => new MediaVaultRecommendationsView(leaf, this));
 		this.registerEditorSuggest(new InsertImageSuggest(this.app, this));
 		this.addRibbonIcon("images", PLUGIN_DISPLAY_NAME, () => {
 			void this.activateView();
@@ -190,17 +185,6 @@ export default class MediaVaultPlugin extends Plugin {
 		const taskLeaf = this.getOrCreateRightLeaf(MEDIA_VAULT_TASK_CENTER_VIEW_TYPE);
 		await taskLeaf.setViewState({type: MEDIA_VAULT_TASK_CENTER_VIEW_TYPE, active: true});
 		await this.app.workspace.revealLeaf(taskLeaf);
-	}
-
-	async openRecommendations(): Promise<void> {
-		const note = this.getActiveMarkdownFile();
-		if (!note) {
-			new Notice("请先打开一个 Markdown 笔记。");
-			return;
-		}
-		const leaf = this.getOrCreateRightLeaf(MEDIA_VAULT_RECOMMENDATIONS_VIEW_TYPE);
-		await leaf.setViewState({type: MEDIA_VAULT_RECOMMENDATIONS_VIEW_TYPE, active: true});
-		await this.app.workspace.revealLeaf(leaf);
 	}
 
 	async rebuildIndex(showNotice: boolean): Promise<void> {
@@ -365,29 +349,22 @@ export default class MediaVaultPlugin extends Plugin {
 
 	openAssetDetail(assetId: string, mode: MediaVaultDetailMode = "detail", annotationId: string | null = null): void {
 		const isNewAsset = this.detailAssetId !== assetId;
+		const nextMode = mode === "annotation" ? "detail" : mode;
 		this.focusedAssetId = assetId;
 		this.detailAssetId = assetId;
-		this.detailMode = mode;
-		this.focusedAnnotationId = annotationId;
-			if (mode === "annotation") {
-				this.detailPanelId = "annotations";
-			} else if (mode === "references") {
-				this.detailPanelId = "references";
-			} else if (mode === "ocr") {
-				this.detailPanelId = "ocr";
-			} else if (isNewAsset) {
-				this.detailPanelId = "overview";
-			}
+		this.detailMode = nextMode;
+		this.focusedAnnotationId = nextMode === "detail" ? null : annotationId;
+		if (nextMode === "references") {
+			this.detailPanelId = "references";
+		} else if (isNewAsset || this.detailPanelId === "annotations") {
+			this.detailPanelId = "overview";
+		}
 		this.notifyUiStateChanged();
 	}
 
 	async openAssetDetailInGallery(assetId: string, mode: MediaVaultDetailMode = "detail", annotationId: string | null = null): Promise<void> {
 		await this.activateView();
 		this.openAssetDetail(assetId, mode, annotationId);
-	}
-
-	async openAssetAnnotationInGallery(assetId: string, annotationId: string): Promise<void> {
-		await this.openAssetDetailInGallery(assetId, "annotation", annotationId);
 	}
 
 	closeAssetDetail(): void {
@@ -414,18 +391,13 @@ export default class MediaVaultPlugin extends Plugin {
 	}
 
 	setDetailPanel(panelId: MediaVaultDetailPanelId): void {
-		if (this.detailPanelId === panelId) {
+		const nextPanelId = panelId === "annotations" ? "overview" : panelId;
+		if (this.detailPanelId === nextPanelId) {
 			return;
 		}
 
-		this.detailPanelId = panelId;
-		if (panelId === "ocr") {
-			this.detailMode = "ocr";
-			this.focusedAnnotationId = null;
-		} else if (this.detailMode === "ocr") {
-			this.detailMode = "detail";
-		}
-		if (panelId !== "annotations" && this.detailMode === "annotation") {
+		this.detailPanelId = nextPanelId;
+		if (this.detailMode === "annotation") {
 			this.detailMode = "detail";
 			this.focusedAnnotationId = null;
 		}
@@ -502,28 +474,6 @@ export default class MediaVaultPlugin extends Plugin {
 		const text = absolute ? this.getAssetSystemPath(asset) ?? asset.filePath : asset.filePath;
 		await navigator.clipboard.writeText(text);
 		new Notice(absolute && text !== asset.filePath ? "已复制图片绝对路径。" : "已复制图片路径。");
-	}
-
-	async copyAssetOcrText(asset: Asset): Promise<void> {
-		const result = this.services.ocrService.getResult(asset.id);
-		if (!result?.text.trim()) {
-			new Notice("当前图片还没有识别文本。");
-			return;
-		}
-		await navigator.clipboard.writeText(result.text);
-		new Notice("已复制识别文本。");
-	}
-
-	async writeOcrResultToAssetNote(asset: Asset): Promise<void> {
-		const result = this.services.ocrService.getResult(asset.id);
-		if (!result?.text.trim()) {
-			new Notice("请先保存识别文本。");
-			return;
-		}
-		const content = await this.readAssetNote(asset);
-		const nextContent = this.services.ocrService.mergeAssetNoteContent(content, result);
-		await this.saveAssetNote(asset, nextContent);
-		new Notice("已写入素材笔记的文本识别区块。");
 	}
 
 	async removeAssetReferencesFromCurrentNote(assetIds: string[]): Promise<RemoveCurrentNoteReferencesResult> {
@@ -830,61 +780,6 @@ export default class MediaVaultPlugin extends Plugin {
 			return;
 		}
 		await this.openAssetDetailInGallery(asset.id, mode);
-	}
-
-	async openCommandTargetAiSuggestions(): Promise<void> {
-		const asset = this.getCommandTargetAsset();
-		if (!asset) {
-			new Notice("请先选择图库图片，或把光标放在 Markdown 图片链接上。");
-			return;
-		}
-		await this.openAiSuggestionsForAsset(asset);
-	}
-
-	async openAiSuggestionsForAsset(asset: Asset): Promise<void> {
-		if (!this.settings.enableAiTagging) {
-			new AiSuggestionModal(this, asset, null).open();
-			return;
-		}
-		try {
-			const suggestion = await this.services.aiMetadataService.generateLocalSuggestion(
-				asset,
-				this.services.assetRepository.getReferencesForAsset(asset.id),
-			);
-			new AiSuggestionModal(this, asset, suggestion).open();
-		} catch (error) {
-			new Notice(`标签建议生成失败：${getErrorMessage(error)}`);
-		}
-	}
-
-	async applyAiMetadataSuggestion(asset: Asset, suggestion: AIMetadataSuggestion, selectedTags: string[], writeTarget: AiSuggestionWriteTarget): Promise<void> {
-		const mergedTags = mergeTags(asset.tags, selectedTags);
-		if (writeTarget === "asset-note") {
-			const content = await this.readAssetNote(asset);
-			await this.saveAssetNote(asset, this.services.aiMetadataService.mergeAssetNoteContent(content, suggestion, selectedTags));
-			const nextAsset = this.services.assetRepository.getAssetById(asset.id) ?? asset;
-			if (nextAsset.notePath) {
-				const file = this.app.vault.getAbstractFileByPath(nextAsset.notePath);
-				if (file instanceof TFile) {
-					await this.app.fileManager.processFrontMatter(file, (frontmatter: Record<string, unknown>) => {
-						frontmatter.type = "asset";
-						frontmatter.asset_id = asset.id;
-						frontmatter.file = asset.filePath;
-						frontmatter.tags = mergedTags;
-						frontmatter.ai_title = suggestion.title ?? "";
-						frontmatter.ai_description = suggestion.description ?? "";
-						frontmatter.ai_provider = suggestion.provider;
-						frontmatter.ai_based_on = suggestion.basedOn;
-					});
-				}
-			}
-		}
-		await this.services.assetRepository.updateAssets([asset.id], (item) => ({
-			...item,
-			tags: mergeTags(item.tags, selectedTags),
-			updatedAt: Date.now(),
-		}));
-		await this.services.aiMetadataService.markApplied(suggestion);
 	}
 
 	async createAssetNoteForCommandTarget(): Promise<void> {
@@ -1724,12 +1619,6 @@ export default class MediaVaultPlugin extends Plugin {
 			event.stopPropagation();
 			void this.openAssetDetailInGallery(asset.id);
 		});
-		const annotation = toolbar.createEl("button", {text: "标注"});
-		annotation.addEventListener("click", (event) => {
-			event.preventDefault();
-			event.stopPropagation();
-			void this.openAssetDetailInGallery(asset.id, "annotation");
-		});
 		const copy = toolbar.createEl("button", {text: "复制链接"});
 		copy.addEventListener("click", (event) => {
 			event.preventDefault();
@@ -1745,7 +1634,6 @@ export default class MediaVaultPlugin extends Plugin {
 		this.registerDomEvent(wrapper, "contextmenu", (event) => {
 			this.showNoteImageMenu(event, asset);
 		});
-		this.attachNoteImageAnnotations(wrapper, asset);
 	}
 
 	private attachNoteImageAnnotations(wrapper: HTMLElement, asset: Asset): void {
@@ -1796,7 +1684,7 @@ export default class MediaVaultPlugin extends Plugin {
 			await this.openAnnotationTarget(annotation, asset.notePath ?? asset.filePath);
 			return;
 		}
-		await this.openAssetDetailInGallery(asset.id, "annotation");
+		await this.openAssetDetailInGallery(asset.id);
 	}
 
 	private async promoteRenderedImageToAssetLibrary(image: HTMLImageElement, sourcePath: string): Promise<void> {
@@ -1940,18 +1828,6 @@ export default class MediaVaultPlugin extends Plugin {
 			.setTitle("打开图片详情")
 			.setIcon("panel-right-open")
 			.onClick(() => void this.openAssetDetailInGallery(asset.id)));
-			menu.addItem((item) => item
-				.setTitle("创建区域标注")
-				.setIcon("scan-line")
-				.onClick(() => void this.openAssetDetailInGallery(asset.id, "annotation")));
-			menu.addItem((item) => item
-				.setTitle("录入识别文本")
-				.setIcon("text-search")
-				.onClick(() => void this.openAssetDetailInGallery(asset.id, "ocr")));
-			menu.addItem((item) => item
-				.setTitle("生成 AI 标签建议")
-				.setIcon("sparkles")
-				.onClick(() => void this.openAiSuggestionsForAsset(asset)));
 				menu.addItem((item) => item
 					.setTitle("复制素材链接")
 				.setIcon("copy")
@@ -1986,18 +1862,6 @@ export default class MediaVaultPlugin extends Plugin {
 			.setTitle("打开图片详情")
 			.setIcon("panel-right-open")
 			.onClick(() => void this.openAssetDetailInGallery(asset.id)));
-			menu.addItem((item) => item
-				.setTitle("创建 / 编辑区域标注")
-				.setIcon("scan-line")
-				.onClick(() => void this.openAssetDetailInGallery(asset.id, "annotation")));
-			menu.addItem((item) => item
-				.setTitle("录入识别文本")
-				.setIcon("text-search")
-				.onClick(() => void this.openAssetDetailInGallery(asset.id, "ocr")));
-			menu.addItem((item) => item
-				.setTitle("生成 AI 标签建议")
-				.setIcon("sparkles")
-				.onClick(() => void this.openAiSuggestionsForAsset(asset)));
 			menu.addItem((item) => item
 				.setTitle("显示图片引用")
 			.setIcon("links-coming-in")

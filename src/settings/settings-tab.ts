@@ -131,16 +131,6 @@ export class MediaVaultSettingTab extends PluginSettingTab {
 					}));
 
 			new Setting(containerEl)
-				.setName("默认同步标注到素材笔记")
-				.setDesc("关闭时，新建区域标注默认只写入插件索引；仍可在单条标注里手动选择写入素材笔记。")
-				.addToggle((toggle) => toggle
-					.setValue(this.plugin.settings.syncAnnotationsToAssetNote)
-					.onChange(async (value) => {
-						this.plugin.settings.syncAnnotationsToAssetNote = value;
-						await this.plugin.saveSettings();
-					}));
-
-			new Setting(containerEl)
 				.setName("主色提取")
 				.setDesc("后续元数据任务使用。")
 				.addToggle((toggle) => toggle
@@ -150,22 +140,5 @@ export class MediaVaultSettingTab extends PluginSettingTab {
 						await this.plugin.saveSettings();
 					}));
 
-				new Setting(containerEl)
-					.setName("本地 AI 标签建议")
-					.setDesc("默认关闭。开启后只基于文件名、路径、已保存识别文本和引用上下文生成本地建议，不上传图片或文本。")
-					.addToggle((toggle) => toggle
-						.setValue(this.plugin.settings.enableAiTagging)
-						.onChange(async (value) => {
-							this.plugin.settings.enableAiTagging = value;
-							await this.plugin.saveSettings();
-							this.display();
-						}));
-
-				new Setting(containerEl)
-					.setName("云端 AI 上传")
-					.setDesc("当前固定关闭。云端上传必须单独设计隐私确认后再接入。")
-					.addToggle((toggle) => toggle
-						.setValue(false)
-						.setDisabled(true));
 	}
 }

@@ -1,8 +1,6 @@
 import {App, Editor, EditorPosition, EditorSuggest, EditorSuggestContext, EditorSuggestTriggerInfo, Notice, TFile} from "obsidian";
 import type MediaVaultPlugin from "../main";
 import type {Asset} from "../types/asset";
-import type {Recommendation} from "../services/recommendation-service";
-import {buildRecommendationContext} from "../services/recommendation-context";
 import {formatFileSize} from "../utils/image-utils";
 
 interface InsertImageSuggestion {
@@ -44,24 +42,11 @@ export class InsertImageSuggest extends EditorSuggest<InsertImageSuggestion> {
 	}
 
 	async getSuggestions(context: EditorSuggestContext): Promise<InsertImageSuggestion[]> {
-		const recommendationContext = await buildRecommendationContext(this.app, this.plugin.services.assetRepository, context.file, context.editor);
-		const dismissedAssetIds = await this.plugin.services.recommendationPreferenceService.getDismissedAssetIds(context.file.path);
 		const query = context.query.trim().toLowerCase();
-		return this.plugin.services.recommendationService
-			.recommendForNote(
-				recommendationContext,
-				this.plugin.services.assetRepository.getActiveAssets(),
-				this.plugin.services.assetRepository.getReferences(),
-				this.plugin.services.assetRepository.getCollections(),
-				{
-					ocrResults: this.plugin.services.assetRepository.getOcrResults(),
-					aiSuggestions: this.plugin.services.assetRepository.getAiSuggestions(),
-				},
-			)
-			.filter((recommendation) => !dismissedAssetIds.has(recommendation.assetId))
-			.map((recommendation) => toInsertImageSuggestion(this.plugin, recommendation))
-			.filter((suggestion): suggestion is InsertImageSuggestion => suggestion !== null)
+		return this.plugin.services.assetRepository.getActiveAssets()
+			.map((asset) => toInsertImageSuggestion(asset))
 			.filter((suggestion) => matchesQuery(suggestion.asset, suggestion.reason, query))
+			.sort((left, right) => right.score - left.score || right.asset.mtime - left.asset.mtime)
 			.slice(0, MAX_INSERT_IMAGE_SUGGESTIONS);
 	}
 
@@ -106,15 +91,11 @@ export class InsertImageSuggest extends EditorSuggest<InsertImageSuggestion> {
 	}
 }
 
-function toInsertImageSuggestion(plugin: MediaVaultPlugin, recommendation: Recommendation): InsertImageSuggestion | null {
-	const asset = plugin.services.assetRepository.getAssetById(recommendation.assetId);
-	if (!asset) {
-		return null;
-	}
+function toInsertImageSuggestion(asset: Asset): InsertImageSuggestion {
 	return {
 		asset,
-		score: recommendation.score,
-		reason: recommendation.reasons.map((reason) => `${reason.label}: ${reason.detail}`).join("；"),
+		score: asset.referenceCount * 5 + (asset.favorite ? 10 : 0) + (asset.rating ?? 0),
+		reason: asset.referenceCount > 0 ? `${asset.referenceCount} 处引用` : "未引用图片",
 	};
 }
 

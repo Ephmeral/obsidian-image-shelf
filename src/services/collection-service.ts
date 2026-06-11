@@ -2,7 +2,7 @@ import type {AssetOrigin} from "../types/asset";
 import type {AssetQuery} from "../types/query";
 
 export type SmartCollectionMode = "visual" | "dsl";
-export type SmartConditionField = "tag" | "rating" | "linked" | "used-in-folder" | "format" | "width" | "height" | "size" | "collection" | "color" | "unused" | "source" | "has-ocr" | "has-annotation";
+export type SmartConditionField = "tag" | "rating" | "linked" | "used-in-folder" | "format" | "width" | "height" | "size" | "collection" | "color" | "unused" | "source" | "has-annotation";
 export type SmartConditionOperator = "contains" | "equals" | "gte" | "lte" | "exists";
 
 export interface SmartCondition {
@@ -75,7 +75,7 @@ export function getDefaultOperator(field: SmartConditionField): SmartConditionOp
 	if (field === "rating" || field === "width" || field === "height" || field === "size") {
 		return "gte";
 	}
-	if (field === "unused" || field === "has-ocr" || field === "has-annotation") {
+	if (field === "unused" || field === "has-annotation") {
 		return "equals";
 	}
 	if (field === "linked") {
@@ -85,7 +85,7 @@ export function getDefaultOperator(field: SmartConditionField): SmartConditionOp
 }
 
 export function getDefaultValue(field: SmartConditionField): string {
-	if (field === "unused" || field === "has-ocr" || field === "has-annotation") {
+	if (field === "unused" || field === "has-annotation") {
 		return "true";
 	}
 	return "";
@@ -129,8 +129,6 @@ function conditionsToAssetQuery(conditions: SmartCondition[]): AssetQuery {
 		} else if (condition.field === "unused") {
 			query.referenced = value.toLowerCase() !== "false";
 			query.referenced = !query.referenced;
-		} else if (condition.field === "has-ocr") {
-			query.hasOcr = condition.operator === "exists" || value.toLowerCase() !== "false";
 		} else if (condition.field === "has-annotation") {
 			query.hasAnnotation = condition.operator === "exists" || value.toLowerCase() !== "false";
 		}
@@ -161,9 +159,6 @@ function assetQueryToConditions(query: AssetQuery): SmartCondition[] {
 	}
 	if (query.referenced === false) {
 		conditions.push(createCondition("unused", "equals", "true"));
-	}
-	if (typeof query.hasOcr === "boolean") {
-		conditions.push(createCondition("has-ocr", "equals", String(query.hasOcr)));
 	}
 	if (typeof query.hasAnnotation === "boolean") {
 		conditions.push(createCondition("has-annotation", "equals", String(query.hasAnnotation)));
@@ -204,9 +199,6 @@ function stringifySmartQuery(query: AssetQuery): string {
 	}
 	if (query.referenced === false) {
 		parts.push("unused:true");
-	}
-	if (typeof query.hasOcr === "boolean") {
-		parts.push(`has-ocr:${query.hasOcr}`);
 	}
 	if (typeof query.hasAnnotation === "boolean") {
 		parts.push(`has-annotation:${query.hasAnnotation}`);
@@ -270,8 +262,6 @@ function parseSmartQueryDsl(dsl: string): SmartDslParseResult {
 			query.linkedByFolder = value;
 		} else if (key === "unused") {
 			query.referenced = value.toLowerCase() === "true" ? false : undefined;
-		} else if (key === "has-ocr") {
-			query.hasOcr = value.toLowerCase() !== "false";
 		} else if (key === "has-annotation") {
 			query.hasAnnotation = value.toLowerCase() !== "false";
 		} else if (key === "imported" && value.startsWith("last-")) {

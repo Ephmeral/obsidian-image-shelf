@@ -24,9 +24,6 @@ export interface MediaVaultSettings {
 	enableDominantColor: boolean;
 	enableSha256: boolean;
 	enablePerceptualHash: boolean;
-	enableOcr: boolean;
-	enableAiTagging: boolean;
-	enableCloudAiUploads: boolean;
 	syncAnnotationsToAssetNote: boolean;
 	mobileReadOnlyMode: boolean;
 	galleryDisplayFields: MediaVaultGalleryDisplayFields;
@@ -63,9 +60,6 @@ export const DEFAULT_SETTINGS: MediaVaultSettings = {
 	enableDominantColor: true,
 	enableSha256: true,
 	enablePerceptualHash: false,
-	enableOcr: false,
-	enableAiTagging: false,
-	enableCloudAiUploads: false,
 	syncAnnotationsToAssetNote: false,
 	mobileReadOnlyMode: true,
 	galleryDisplayFields: DEFAULT_GALLERY_DISPLAY_FIELDS,
@@ -87,9 +81,6 @@ export function normalizeMediaVaultSettings(settings: Partial<MediaVaultSettings
 			...DEFAULT_GALLERY_DISPLAY_FIELDS,
 			...settings?.galleryDisplayFields,
 		},
-		enableCloudAiUploads: false,
-		enableOcr: false,
-		enableAiTagging: Boolean(settings?.enableAiTagging),
 	};
 }
 

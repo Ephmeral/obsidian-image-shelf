@@ -2,17 +2,16 @@
 
 Image Shelf is an Obsidian community plugin for managing vault images as searchable, reference-aware assets.
 
-It scans images in the current vault, builds a local asset index, tracks Markdown references, renders a multi-view gallery, and provides tools for image cleanup, annotation, OCR text storage, and note-aware recommendations.
+It scans images in the current vault, builds a local asset index, tracks Markdown references, renders a multi-view gallery, and provides tools for image cleanup and Asset Note workflows.
 
 ## Current Capabilities
 
-- Multi-pane Obsidian UI: navigation, gallery, inspector, task center, and current-note recommendations.
+- Multi-pane Obsidian UI: navigation, gallery, inspector, and task center.
 - Image indexing: file metadata, dimensions, SHA-256 for eligible files, dominant colors, status, tags, collections, and Asset Note metadata.
 - Reference graph: wiki embeds, Markdown image links, and HTML image tags mapped back to source notes, headings, and line context.
 - Gallery workflows: masonry, grid, list, and compact modes with search, sorting, quick filters, field visibility, multi-select, and virtual rendering.
-- Detail workspace: large preview, zoom/pan, references, Asset Note editing, metadata, similar images, OCR text panel, and rectangular annotations.
+- Detail workspace: large preview, zoom/pan, references, Asset Note editing, metadata, and similar images.
 - Safety-first file operations: dry-run summaries, transaction logs, Markdown link rewrites, trash/archive/permanent-delete confirmation, and restore support for plugin trash state.
-- Local-first AI/OCR foundations: OCR currently saves pasted local text; AI tag suggestions currently use local rules and require explicit user confirmation.
 
 ## Project Layout
 
@@ -20,7 +19,7 @@ It scans images in the current vault, builds a local asset index, tracks Markdow
 src/
   main.ts                 # Plugin lifecycle, command handlers, file operations
   commands/               # Command palette registration
-  services/               # Indexing, repository, thumbnails, search, OCR, AI, tasks
+  services/               # Indexing, repository, thumbnails, search, and tasks
   settings/               # Defaults and settings tab
   storage/                # Plugin data persistence helpers
   types/                  # Shared domain types
@@ -91,4 +90,4 @@ Add tests for pure TypeScript utilities first. Obsidian API behavior should be c
 
 ## Privacy And Safety
 
-Image Shelf defaults to local/offline behavior. Cloud AI uploads are disabled by normalization in settings, and current OCR/AI flows do not upload images. Do not introduce network requests, telemetry, or remote-code execution without a clear user-facing reason, explicit opt-in, and documentation.
+Image Shelf defaults to local/offline behavior. Do not introduce network requests, telemetry, or remote-code execution without a clear user-facing reason, explicit opt-in, and documentation.

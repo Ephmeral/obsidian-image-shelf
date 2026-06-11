@@ -28,12 +28,9 @@ export class SearchService {
 			: null;
 		const duplicateAssetIds = quickFilter === "duplicates" ? getDuplicateAssetIds(assets) : null;
 		return assets.filter((asset) => {
-			const ocrText = this.repository.getOcrResult(asset.id)?.text;
-			const aiSuggestion = this.repository.getAiSuggestion(asset.id);
-			const hasOcr = Boolean(ocrText?.trim());
 			const hasAnnotation = this.repository.getAnnotationsForAsset(asset.id).length > 0;
 			if (quickFilter === "trash") {
-				return asset.status === "trash" && matchesQuery(asset, query, linkedByNoteAssetIds, linkedByFolderAssetIds, ocrText, aiSuggestion, hasOcr, hasAnnotation);
+				return asset.status === "trash" && matchesQuery(asset, query, linkedByNoteAssetIds, linkedByFolderAssetIds, hasAnnotation);
 			}
 			if (asset.status !== "active") {
 				return false;
@@ -50,7 +47,7 @@ export class SearchService {
 			if (quickFilter === "recent" && !isRecent(asset.mtime)) {
 				return false;
 			}
-			return matchesQuery(asset, query, linkedByNoteAssetIds, linkedByFolderAssetIds, ocrText, aiSuggestion, hasOcr, hasAnnotation);
+			return matchesQuery(asset, query, linkedByNoteAssetIds, linkedByFolderAssetIds, hasAnnotation);
 		});
 	}
 }
@@ -150,14 +147,14 @@ function compareDuplicateAssetPriority(left: Asset, right: Asset): number {
 		|| left.filename.localeCompare(right.filename);
 }
 
-function matchesQuery(asset: Asset, query: AssetQuery, linkedByNoteAssetIds: Set<string> | null, linkedByFolderAssetIds: Set<string> | null, ocrText: string | undefined, aiSuggestion: {title?: string; description?: string; tags: Array<{value: string}>} | undefined, hasOcr: boolean, hasAnnotation: boolean): boolean {
+function matchesQuery(asset: Asset, query: AssetQuery, linkedByNoteAssetIds: Set<string> | null, linkedByFolderAssetIds: Set<string> | null, hasAnnotation: boolean): boolean {
 	if (linkedByNoteAssetIds && !linkedByNoteAssetIds.has(asset.id)) {
 		return false;
 	}
 	if (linkedByFolderAssetIds && !linkedByFolderAssetIds.has(asset.id)) {
 		return false;
 	}
-	if (query.keyword && !matchesKeyword(asset, query.keyword, query.keywordMode, ocrText, aiSuggestion)) {
+	if (query.keyword && !matchesKeyword(asset, query.keyword, query.keywordMode)) {
 		return false;
 	}
 	if (query.formats && query.formats.length > 0 && !query.formats.includes(asset.ext.toLowerCase())) {
@@ -170,9 +167,6 @@ function matchesQuery(asset: Asset, query: AssetQuery, linkedByNoteAssetIds: Set
 		return false;
 	}
 	if (typeof query.referenced === "boolean" && (asset.referenceCount > 0) !== query.referenced) {
-		return false;
-	}
-	if (typeof query.hasOcr === "boolean" && hasOcr !== query.hasOcr) {
 		return false;
 	}
 	if (typeof query.hasAnnotation === "boolean" && hasAnnotation !== query.hasAnnotation) {
@@ -232,7 +226,7 @@ function matchesRatio(asset: Asset, ratio: NonNullable<AssetQuery["ratio"]>): bo
 	return asset.height > asset.width + squareTolerance;
 }
 
-function matchesKeyword(asset: Asset, keyword: string, keywordMode: AssetQuery["keywordMode"], ocrText?: string, aiSuggestion?: {title?: string; description?: string; tags: Array<{value: string}>}): boolean {
+function matchesKeyword(asset: Asset, keyword: string, keywordMode: AssetQuery["keywordMode"]): boolean {
 	const normalized = keyword.trim().toLowerCase();
 	if (!normalized) {
 		return true;
@@ -245,12 +239,6 @@ function matchesKeyword(asset: Asset, keyword: string, keywordMode: AssetQuery["
 		...asset.tags,
 		...asset.collections,
 	];
-	if (ocrText) {
-		haystackParts.push(ocrText);
-	}
-	if (aiSuggestion) {
-		haystackParts.push(aiSuggestion.title ?? "", aiSuggestion.description ?? "", ...aiSuggestion.tags.map((tag) => tag.value));
-	}
 	const normalizedParts = haystackParts.map((part) => part.toLowerCase());
 	const haystack = normalizedParts.join(" ");
 
